@@ -1,0 +1,10 @@
+default partial alphanumeric_keys
+xkb_symbols "basic" {
+    include "us(intl)"
+
+    name[Group1] = "US International Custom";
+
+    key <AC11> {
+        [ dead_acute, quotedbl, apostrophe, quotedbl ]
+    };
+};

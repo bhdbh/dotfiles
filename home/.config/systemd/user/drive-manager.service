@@ -1,0 +1,14 @@
+[Unit]
+Description=USB automount and ~/Drives links
+Documentation=https://storaged.org/doc/udisks2-api/latest/
+Before=kidex.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @HOME@/.local/libexec/drive-manager
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=default.target

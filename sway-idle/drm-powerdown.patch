@@ -1,0 +1,532 @@
+--- a/build.sh
++++ b/build.sh
+@@ -48,13 +48,21 @@
+             printf '%s\n' 'Falta pam-devel. Instale esse pacote antes de compilar o bloqueador TTY.' >&2
+             exit 1
+         fi
++        drm_include=/usr/include
++        if [[ ! -f "$drm_include/xf86drmMode.h" ]]; then
++            drm_include="$root/sway-window-background/.build-deps/usr/include"
++        fi
++        if [[ ! -f "$drm_include/xf86drmMode.h" ]]; then
++            printf '%s\n' 'Falta libdrm-devel para compilar o controle de energia dos monitores.' >&2
++            exit 1
++        fi
+         mkdir -p "$build_root/idle"
+         cp -p "$root/sway-idle/source/"* "$build_root/idle/"
+         make -C "$build_root/idle" -j "$jobs" \
+-            CPPFLAGS="-I$pam_include" \
++            CPPFLAGS="-I$pam_include -I$drm_include -I$drm_include/libdrm" \
+             CFLAGS='-O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE' \
+             LDFLAGS='-pie -Wl,-z,relro,-z,now' \
+-            ldlibs='-l:libpam.so.0 -l:libpam_misc.so.0 -l:libsystemd.so.0'
++            ldlibs='-l:libpam.so.0 -l:libpam_misc.so.0 -l:libsystemd.so.0 -l:libdrm.so.2'
+         ;;
+     acer)
+         mkdir -p "$build_root/acer"
+--- a/sway-idle/check.sh
++++ b/sway-idle/check.sh
+@@ -10,6 +10,13 @@
+ cc -O2 -Wall -Wextra -D_XOPEN_SOURCE=600 -I"$pam_include" \
+     "$root/sway-idle/tests/vt-transition.c" -lutil -o "$build_root/idle/vt-transition-test"
+ "$build_root/idle/vt-transition-test"
++drm_include=/usr/include
++if [[ ! -f "$drm_include/xf86drmMode.h" ]]; then
++    drm_include="$root/sway-window-background/.build-deps/usr/include"
++fi
++cc -O2 -Wall -Wextra -I"$pam_include" -I"$drm_include" -I"$drm_include/libdrm" \
++    "$root/sway-idle/tests/display-power.c" -o "$build_root/idle/display-power-test"
++"$build_root/idle/display-power-test"
+ cc -O2 -Wall -Wextra -Wno-unused-parameter -D_XOPEN_SOURCE=600 \
+     -I"$root/sway-idle/source" -I"$pam_include" \
+     "$root/sway-idle/source/main.c" "$root/sway-idle/source/options.c" \
+--- a/sway-idle/source/vt.c
++++ b/sway-idle/source/vt.c
+@@ -203,7 +203,7 @@
+ 	char command = TIOCL_BLANKSCREEN;
+ 	unsigned char key;
+ 	ssize_t count;
+-	int blanked;
++	int blanked, powered;
+ 	raw.c_lflag &= ~ICANON;
+ 	raw.c_cc[VMIN] = 1;
+ 	raw.c_cc[VTIME] = 0;
+@@ -217,17 +217,22 @@
+ 	vesa[1] = 0;
+ 	if (ioctl(vt->fd, TIOCLINUX, vesa) < 0)
+ 		syslog(LOG_WARNING, "Could not reset console power-down mode: %s", strerror(errno));
+-	if (blanked == 0) {
++	/* A successful console blank ioctl can leave the signal and backlight on.
++	 * Keep DRM master until the wake key, restoring only outputs we changed. */
++	powered = display_power_down();
++	if (blanked == 0 || powered > 0) {
+ 		do {
+ 			count = read(vt->fd, &key, 1);
+ 		} while (count < 0 && errno == EINTR);
+ 	}
++	display_power_restore();
+ 	command = TIOCL_UNBLANKSCREEN;
+ 	ioctl(vt->fd, TIOCLINUX, &command);
+ 	tcsetattr(vt->fd, TCSAFLUSH, &vt->term);
+ }
+ 
+ CLEANUP void vt_reset(vt_t *vt) {
++	display_power_restore();
+ 	clear_vt(vt);
+ 	tcsetattr(vt->fd, TCSANOW, &vt->term_orig);
+ }
+--- a/sway-idle/source/physlock.h
++++ b/sway-idle/source/physlock.h
+@@ -101,5 +101,9 @@
+ void vt_blank_until_key(vt_t*);
+ CLEANUP void vt_reset(vt_t*);
+ 
++/* display.c: called only while the console lock owns the active VT. */
++int display_power_down(void);
++CLEANUP void display_power_restore(void);
++
+ #endif /* PHYSLOCK_H */
+ 
+--- a/sway-idle/source/Makefile
++++ b/sway-idle/source/Makefile
+@@ -1,4 +1,4 @@
+-version = 13+rice-idle-powerdown-20261106
++version = 13+rice-drm-powerdown-20261107
+ 
+ srcdir = .
+ VPATH = $(srcdir)
+@@ -19,9 +19,9 @@
+ lib_elogind_0 =
+ lib_elogind_1 = -lelogind
+ ldlibs = $(LDLIBS) -lpam -lpam_misc \
+-  $(lib_systemd_$(HAVE_SYSTEMD)) $(lib_elogind_$(HAVE_ELOGIND))
++  $(lib_systemd_$(HAVE_SYSTEMD)) $(lib_elogind_$(HAVE_ELOGIND)) -ldrm
+ 
+-objs = main.o options.o session.o util.o vt.o
++objs = main.o options.o session.o util.o vt.o display.o
+ 
+ all: physlock
+ 
+--- a/sway-idle/install-user.py
++++ b/sway-idle/install-user.py
+@@ -43,9 +43,9 @@
+                    stdout=subprocess.DEVNULL, timeout=3)
+     target = USER_HOME / '.local/bin/sway-session-idle'
+     replace(source / 'sway-session-idle', target, 0o755)
+-    for name in ('main.c', 'vt.c', 'Makefile'):
++    for name in ('main.c', 'vt.c', 'display.c', 'physlock.h', 'Makefile'):
+         replace(source / 'source' / name, legacy / 'source' / name, 0o644)
+-    for name in ('README.md', 'multi-output.patch', 'idle-powerdown.patch'):
++    for name in ('README.md', 'multi-output.patch', 'idle-powerdown.patch', 'drm-powerdown.patch'):
+         replace(source / name, legacy / name, 0o644)
+     replace(ROOT / '.build/idle/physlock', legacy / 'sway-tty-lock', 0o750)
+     # Stop only the previous supervisor for this exact Sway socket. Its SIGTERM
+--- a/sway-idle/install-vt-recovery.py
++++ b/sway-idle/install-vt-recovery.py
+@@ -1,4 +1,4 @@
+-"""Install the reviewed TTY-lock power-down build, preserving a root backup."""
++"""Install the reviewed DRM power-down build, preserving a root backup."""
+ from datetime import datetime
+ from pathlib import Path
+ from zoneinfo import ZoneInfo
+@@ -10,8 +10,8 @@
+ import subprocess
+ import tempfile
+ 
+-EXPECTED = "7b912973960c22ddc9219c708e92787dafbb4ff49b228718a9d9aa50d2c9dcf2"
+-PREVIOUS = "86440c35278a8dc398cb16712f58cdaabac1520a88489bbc8311e94d6a591df1"
++EXPECTED = "4460c1117535b3f186a95083ebe350ced65596dd40182fa29e468bfa91de4ff8"
++PREVIOUS = "7b912973960c22ddc9219c708e92787dafbb4ff49b228718a9d9aa50d2c9dcf2"
+ ROOT = Path(__file__).resolve().parent.parent
+ TARGET = Path("/usr/local/bin/sway-tty-lock")
+ 
+--- a/sway-idle/README.md
++++ b/sway-idle/README.md
+@@ -7,6 +7,39 @@
+ The login remains on tty1; locking uses a separate Linux virtual console and
+ authenticates with PAM. Both monitors mirror that console, so password entry
+ is shared and only one successful authentication is required.
++
++## DRM monitor power-down — 2026-11-07
++
++The previous console blanking request could succeed while the monitors kept
++their video signal/backlight on. The locker now also sets the active desktop
++connectors' DRM `DPMS` property to `Off`, after securing the lock VT and after
++the compositor releases DRM master. This controls display power through the
++kernel instead of relying on console blanking alone. See the kernel's
++[standard connector properties](https://docs.kernel.org/gpu/drm-kms.html#standard-connector-properties).
++
++The locker keeps DRM master while waiting for the wake key, then restores only
++the connectors it actually powered down, releases every DRM device, and shows
++the existing password prompt. Cleanup also restores saved display state.
++Disconnected, disabled, already powered-off and non-desktop outputs are
++skipped. A master acquisition failure never steals control from a compositor;
++errors are logged and the existing console blanking remains available.
++No privileged process runs compositor IPC or external power commands.
++The 30/60-minute AC policy and 5-minute battery policy are unchanged.
++
++DRM regression checks simulate two monitors, disconnected/disabled/off outputs,
++non-desktop devices, partial power-off and power-on failures, busy DRM master,
++missing resources, repeated calls and cleanup. They never open a real device.
++The physical lock/wake test must also confirm connector power state and the
++return to the existing session. The build additionally links system libdrm;
++headers come from `libdrm-devel` or the existing local Sway build dependencies.
++
++Live validation on 2026-11-07 observed both `HDMI-A-1` and `eDP-1` in DRM
++`Off`, followed by `On` after normal password authentication. Workspaces
++stayed on their original outputs, and the user confirmed both monitors
++physically entered standby. The record is `.build/idle/live-power-validation.json`.
++In that attempt the console had already powered off the connectors before
++the additional DRM request; the fallback itself is covered by the simulated
++failure tests, rather than independently exercised against a failed live blank.
+ 
+ ## Idle monitor power-down — 2026-11-06
+ 
+@@ -133,7 +166,7 @@
+ active locker, saves the previous executable under `/var/backups/sway-tty-lock/`,
+ installs atomically with `root:user` and mode `4750`, restores SELinux context
+ and verifies only `-h`/`-v`. Its version is
+-`physlock 13+rice-idle-powerdown-20261106`. It requires the operating system's
++`physlock 13+rice-drm-powerdown-20261107`. It requires the operating system's
+ administrator authentication. Neither installer locks or suspends the session.
+ 
+ `physlock.patch` records the original blanking change; `vt-recovery.patch`
+--- a/sway-idle/tests/vt-transition.c
++++ b/sway-idle/tests/vt-transition.c
+@@ -35,11 +35,16 @@
+ static int state_interrupts, activation_error, vesa_mode, blank_calls, wake_calls;
+ static int blank_error, powerdown_error, powerdown_calls, reset_calls;
+ static int blank_power_mode;
++static int drm_off_calls, drm_on_calls, drm_outputs;
+ static int acquire_master = -1, cleared_before_activate, error_calls;
+ static const char *acquire_path;
+ 
++int display_power_down(void) { drm_off_calls++; return drm_outputs; }
++void display_power_restore(void) { drm_on_calls++; }
++
+ static ssize_t fake_read(int terminal, void *buffer, size_t size) {
+     assert(vesa_mode == 0 && reset_calls == 1);
++    assert(drm_off_calls == 1 && drm_on_calls == 0);
+     return read(terminal, buffer, size);
+ }
+ 
+@@ -180,6 +185,8 @@
+     blank_error = powerdown_error = powerdown_calls = reset_calls = 0;
+     blank_calls = wake_calls = 0;
+     blank_power_mode = -1;
++    drm_off_calls = drm_on_calls = 0;
++    drm_outputs = 2;
+     fd = 42;
+ }
+ 
+@@ -235,6 +242,7 @@
+     vt_blank_until_key(&console);
+     assert(vesa_mode == 0 && blank_calls == 1 && wake_calls == 1);
+     assert(blank_power_mode == 3 && powerdown_calls == 1 && reset_calls == 1);
++    assert(drm_off_calls == 1 && drm_on_calls == 1);
+     assert(tcgetattr(slave, &restored) == 0);
+     assert(restored.c_lflag == console.term.c_lflag);
+     assert(restored.c_cc[VMIN] == console.term.c_cc[VMIN]);
+@@ -245,6 +253,7 @@
+      * without waiting for an input byte. */
+     reset();
+     blank_error = EIO;
++    drm_outputs = 0;
+     assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
+     console = (vt_t){ .fd = slave, .ios = fdopen(slave, "r+") };
+     assert(console.ios && tcgetattr(slave, &console.term) == 0);
+--- /dev/null
++++ b/sway-idle/source/display.c
+@@ -0,0 +1,136 @@
++/* Power down the console's active DRM connectors while waiting for a key.
++ * Only called after the lock VT is secured and Sway has released DRM master.
++ * No compositor IPC, environment paths or external programs run as root. */
++#define _GNU_SOURCE
++#include "physlock.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <syslog.h>
++#include <unistd.h>
++#include <xf86drm.h>
++#include <xf86drmMode.h>
++
++#define MAX_CARDS 64
++#define MAX_CONNECTORS 32
++
++struct saved_connector {
++	uint32_t connector, property;
++	uint64_t value;
++};
++
++struct saved_card {
++	int fd, count;
++	struct saved_connector connectors[MAX_CONNECTORS];
++};
++
++static struct saved_card cards[MAX_CARDS];
++static int card_count;
++
++void display_power_restore(void) {
++	int i, j;
++	for (i = 0; i < card_count; i++) {
++		struct saved_card *card = &cards[i];
++		for (j = 0; j < card->count; j++) {
++			struct saved_connector *saved = &card->connectors[j];
++			if (drmModeConnectorSetProperty(card->fd, saved->connector,
++			                               saved->property, saved->value) < 0)
++				syslog(LOG_ERR, "Could not restore DRM connector %u: %s",
++				       saved->connector, strerror(errno));
++		}
++		drmDropMaster(card->fd);
++		close(card->fd);
++	}
++	if (card_count)
++		syslog(LOG_NOTICE, "Restored monitor power and released DRM devices");
++	card_count = 0;
++}
++
++int display_power_down(void) {
++	int number, total = 0;
++	/* Do not overwrite the saved state if called twice before waking. */
++	if (card_count)
++		return 0;
++	for (number = 0; number < MAX_CARDS; number++) {
++		char path[64];
++		int device, i;
++		struct stat info;
++		drmModeRes *resources;
++		struct saved_card *card = &cards[card_count];
++
++		snprintf(path, sizeof(path), "/dev/dri/card%d", number);
++		device = open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
++		if (device < 0)
++			continue;
++		if (fstat(device, &info) < 0 || !S_ISCHR(info.st_mode) ||
++		    drmSetMaster(device) < 0) {
++			syslog(LOG_WARNING, "Could not acquire console DRM device %s: %s",
++			       path, strerror(errno));
++			close(device);
++			continue;
++		}
++		resources = drmModeGetResources(device);
++		if (!resources) {
++			drmDropMaster(device);
++			close(device);
++			continue;
++		}
++		card->fd = device;
++		card->count = 0;
++		for (i = 0; i < resources->count_connectors && card->count < MAX_CONNECTORS; i++) {
++			drmModeConnector *connector = drmModeGetConnectorCurrent(device, resources->connectors[i]);
++			drmModeEncoder *encoder;
++			uint32_t property = 0;
++			uint64_t value = DRM_MODE_DPMS_OFF;
++			int j, desktop = 1, enabled;
++			if (!connector)
++				continue;
++			if (connector->connection != DRM_MODE_CONNECTED || !connector->encoder_id) {
++				drmModeFreeConnector(connector);
++				continue;
++			}
++			encoder = drmModeGetEncoder(device, connector->encoder_id);
++			enabled = encoder && encoder->crtc_id;
++			if (encoder)
++				drmModeFreeEncoder(encoder);
++			for (j = 0; enabled && j < connector->count_props; j++) {
++				drmModePropertyRes *p = drmModeGetProperty(device, connector->props[j]);
++				if (!p)
++					continue;
++				if (!strcmp(p->name, "DPMS")) {
++					property = p->prop_id;
++					value = connector->prop_values[j];
++				} else if (!strcmp(p->name, "non-desktop") && connector->prop_values[j]) {
++					desktop = 0;
++				}
++				drmModeFreeProperty(p);
++			}
++			if (desktop && property && value == DRM_MODE_DPMS_ON) {
++				if (drmModeConnectorSetProperty(device, connector->connector_id,
++				                               property, DRM_MODE_DPMS_OFF) == 0) {
++					card->connectors[card->count++] = (struct saved_connector){
++						connector->connector_id, property, value };
++					total++;
++					syslog(LOG_NOTICE, "Powered off DRM connector %u on %s",
++					       connector->connector_id, path);
++				} else {
++					syslog(LOG_WARNING, "Could not power off DRM connector %u: %s",
++					       connector->connector_id, strerror(errno));
++				}
++			}
++			drmModeFreeConnector(connector);
++		}
++		drmModeFreeResources(resources);
++		if (card->count) {
++			card_count++;
++		} else {
++			drmDropMaster(device);
++			close(device);
++		}
++	}
++	if (!total)
++		syslog(LOG_WARNING, "No active DRM connector was powered off; console blanking only");
++	return total;
++}
+--- /dev/null
++++ b/sway-idle/tests/display-power.c
+@@ -0,0 +1,153 @@
++/* No device is opened: all DRM and device operations are simulated. */
++#define _GNU_SOURCE
++#include <assert.h>
++#include <fcntl.h>
++#include <stdarg.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <syslog.h>
++#include <unistd.h>
++#include <xf86drm.h>
++#include <xf86drmMode.h>
++
++static int fake_open(const char *, int, ...);
++static int fake_close(int);
++static int fake_stat(int, struct stat *);
++static int fake_master(int);
++static int fake_drop(int);
++static void fake_log(int, const char *, ...);
++static drmModeRes *fake_resources(int);
++static drmModeConnector *fake_connector(int, uint32_t);
++static drmModeEncoder *fake_encoder(int, uint32_t);
++static drmModePropertyRes *fake_property(int, uint32_t);
++static int fake_set(int, uint32_t, uint32_t, uint64_t);
++static void fake_free(void *);
++#define open fake_open
++#define close fake_close
++#define fstat fake_stat
++#define syslog fake_log
++#define drmSetMaster fake_master
++#define drmDropMaster fake_drop
++#define drmModeGetResources fake_resources
++#define drmModeGetConnectorCurrent fake_connector
++#define drmModeGetEncoder fake_encoder
++#define drmModeGetProperty fake_property
++#define drmModeConnectorSetProperty fake_set
++#define drmModeFreeResources fake_free
++#define drmModeFreeConnector fake_free
++#define drmModeFreeEncoder fake_free
++#define drmModeFreeProperty fake_free
++#include "../source/display.c"
++#undef open
++#undef close
++#undef fstat
++#undef syslog
++
++static drmModeRes resources;
++static drmModeConnector connectors[6];
++static drmModeEncoder encoders[6];
++static drmModePropertyRes properties[2];
++static uint32_t ids[6], property_ids[2];
++static uint64_t values[6][2];
++static int acquired, dropped, closed, fail_master, fail_off, fail_on, no_resources;
++static int changes, changed_ids[16];
++static uint64_t changed_values[16];
++
++static int fake_open(const char *path, int flags, ...) {
++    assert((flags & (O_NOFOLLOW | O_CLOEXEC)) == (O_NOFOLLOW | O_CLOEXEC));
++    if (!strcmp(path, "/dev/dri/card1")) return 90;
++    errno = ENOENT;
++    return -1;
++}
++static int fake_close(int fd) { assert(fd == 90); closed++; return 0; }
++static int fake_stat(int fd, struct stat *info) {
++    assert(fd == 90); info->st_mode = S_IFCHR; return 0;
++}
++static int fake_master(int fd) {
++    assert(fd == 90);
++    if (fail_master) { errno = EBUSY; return -1; }
++    acquired++; return 0;
++}
++static int fake_drop(int fd) { assert(fd == 90); dropped++; return 0; }
++static void fake_log(int priority, const char *text, ...) { (void)priority; (void)text; }
++static drmModeRes *fake_resources(int fd) { assert(fd == 90); return no_resources ? NULL : &resources; }
++static drmModeConnector *fake_connector(int fd, uint32_t id) {
++    assert(fd == 90 && id >= 1 && id <= 6); return &connectors[id-1];
++}
++static drmModeEncoder *fake_encoder(int fd, uint32_t id) {
++    assert(fd == 90 && id >= 1 && id <= 6); return &encoders[id-1];
++}
++static drmModePropertyRes *fake_property(int fd, uint32_t id) {
++    assert(fd == 90 && id >= 1 && id <= 2); return &properties[id-1];
++}
++static int fake_set(int fd, uint32_t id, uint32_t property, uint64_t value) {
++    assert(fd == 90 && property == 1);
++    changed_ids[changes] = (int)id;
++    changed_values[changes++] = value;
++    if ((int)id == fail_off && value == DRM_MODE_DPMS_OFF) { errno=EIO; return -1; }
++    if ((int)id == fail_on && value == DRM_MODE_DPMS_ON) { errno=EIO; return -1; }
++    values[id-1][0] = value;
++    return 0;
++}
++static void fake_free(void *pointer) { assert(pointer); }
++
++static void reset(void) {
++    assert(card_count == 0);
++    acquired = dropped = closed = fail_master = fail_off = fail_on = no_resources = changes = 0;
++    memset(connectors, 0, sizeof(connectors));
++    memset(encoders, 0, sizeof(encoders));
++    memset(values, 0, sizeof(values));
++    resources = (drmModeRes){ .count_connectors=6, .connectors=ids };
++    property_ids[0]=1; property_ids[1]=2;
++    properties[0].prop_id=1; strcpy(properties[0].name,"DPMS");
++    properties[1].prop_id=2; strcpy(properties[1].name,"non-desktop");
++    for (int i=0; i<6; i++) {
++        ids[i]=(uint32_t)i+1;
++        connectors[i]=(drmModeConnector){ .connector_id=ids[i], .encoder_id=ids[i],
++            .connection=DRM_MODE_CONNECTED, .count_props=2, .props=property_ids,
++            .prop_values=values[i] };
++        encoders[i].crtc_id=ids[i];
++    }
++    /* Two active desktop monitors, a disconnected output, an output disabled
++     * by the lid, an already powered-off output, and a non-desktop device. */
++    connectors[2].connection=DRM_MODE_DISCONNECTED;
++    encoders[3].crtc_id=0;
++    values[4][0]=DRM_MODE_DPMS_OFF;
++    values[5][1]=1;
++}
++
++int main(void) {
++    reset();
++    assert(display_power_down()==2 && changes==2 && card_count==1);
++    assert(changed_ids[0]==1 && changed_ids[1]==2);
++    assert(changed_values[0]==DRM_MODE_DPMS_OFF && changed_values[1]==DRM_MODE_DPMS_OFF);
++    assert(display_power_down()==0 && changes==2); /* Preserve the snapshot. */
++    display_power_restore();
++    assert(changes==4 && changed_ids[2]==1 && changed_ids[3]==2);
++    assert(changed_values[2]==DRM_MODE_DPMS_ON && changed_values[3]==DRM_MODE_DPMS_ON);
++    assert(acquired==1 && dropped==1 && closed==1 && !card_count);
++    display_power_restore();
++    assert(changes==4 && closed==1); /* Cleanup is idempotent. */
++
++    reset(); fail_off=1;
++    assert(display_power_down()==1 && changes==2);
++    display_power_restore();
++    assert(changes==3 && changed_ids[2]==2 && changed_values[2]==DRM_MODE_DPMS_ON);
++
++    reset(); fail_on=1;
++    assert(display_power_down()==2);
++    display_power_restore();
++    assert(changes==4 && changed_ids[3]==2 && dropped==1 && closed==1);
++
++    reset(); fail_master=1;
++    assert(display_power_down()==0 && changes==0 && acquired==0 && closed==1);
++    display_power_restore();
++    assert(dropped==0); /* Never steal a compositor's DRM master. */
++
++    reset(); no_resources=1;
++    assert(display_power_down()==0 && acquired==1 && dropped==1 && closed==1);
++    display_power_restore();
++    puts("DRM power-down/restore checks passed: multiple outputs, disabled outputs, partial failures, master ownership and cleanup");
++    return 0;
++}

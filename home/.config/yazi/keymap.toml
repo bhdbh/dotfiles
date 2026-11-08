@@ -1,0 +1,20 @@
+[[mgr.prepend_keymap]]
+on = "<Esc>"
+run = "plugin desktop-dialog"
+desc = "Close portal/action dialog, or clear selection in regular sessions"
+
+[[mgr.prepend_keymap]]
+on = "E"
+run = 'shell --block -- 7z x %h'
+desc = "Extract archive here"
+
+[[mgr.prepend_keymap]]
+on = "<Enter>"
+run = "plugin smart-enter"
+desc = "Open file or enter directory"
+
+[[mgr.prepend_keymap]]
+on = "!"
+for = "unix"
+run = 'shell "$SHELL" --block'
+desc = "Open Fish here"

@@ -1,0 +1,19 @@
+Config(
+    monitor_usb_mounts: true,
+    ignore_file: Some("@HOME@/.config/anyrun/search.ignore"),
+    drive_links: Some(WatchDir(
+        path: "@HOME@/Drives",
+        recurse: true,
+        ignored: [],
+    )),
+    ignored: [
+        ".*",
+    ],
+    directories: [
+        WatchDir(
+            path: "@HOME@",
+            recurse: true,
+            ignored: [],
+        ),
+    ],
+)

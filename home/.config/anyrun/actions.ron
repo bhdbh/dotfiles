@@ -1,0 +1,33 @@
+Config(
+    enable_power_actions: false,
+    custom_actions: [
+        (
+            title: "Suspend",
+            command: "@HOME@/.local/bin/sway-session-idle --suspend",
+            description: "Lock and suspend",
+            icon: "system-suspend",
+            confirm: true,
+        ),
+        (
+            title: "Log out",
+            command: "loginctl terminate-session $XDG_SESSION_ID",
+            description: "End session",
+            icon: "system-log-out",
+            confirm: true,
+        ),
+        (
+            title: "Reboot",
+            command: "systemctl reboot || reboot",
+            description: "Restart",
+            icon: "system-reboot",
+            confirm: true,
+        ),
+        (
+            title: "Shutdown",
+            command: "systemctl poweroff || poweroff",
+            description: "Power off",
+            icon: "system-shutdown",
+            confirm: true,
+        ),
+    ],
+)

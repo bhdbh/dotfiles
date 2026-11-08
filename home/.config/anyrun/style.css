@@ -1,0 +1,152 @@
+@define-color zinc900 #18181b;
+@define-color zinc800 #27272a;
+@define-color zinc700 #3f3f46;
+@define-color zinc600 #52525b;
+@define-color zinc400 #a1a1aa;
+@define-color zinc50 #fafafa;
+
+/* Flat style: no widget, text or icon shadows, including hover and backdrop. */
+* {
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}
+
+/* Backdrop */
+window.background.fullscreen {
+    background-color: rgba(9, 9, 11, 0.75);
+}
+
+/* Main container */
+.main {
+    background: @zinc900;
+    border: 3px solid @zinc600;
+    border-radius: 0;
+    padding: 0;
+    margin: 0;
+    border-spacing: 0;
+}
+
+/* Search */
+.main > text {
+    background: @zinc800;
+    color: @zinc50;
+
+    font-family: "Red Hat Mono";
+    font-size: 15px;
+    font-weight: normal;
+
+    padding-top: 6px;
+    padding-right: 6px;
+    padding-bottom: 6px;
+    padding-left: 6px;
+    margin: 0;
+
+    min-height: 21px;
+    border: none;
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+}
+
+.main.has-results > text {
+    border-bottom: 3px solid @zinc600;
+}
+
+.main > text.calculated {
+    font-weight: normal;
+}
+
+/* Search text selection */
+.main > text selection {
+    background-color: @zinc700;
+    color: @zinc50;
+}
+
+/* Result containers */
+.matches,
+.plugin,
+.info {
+    background: @zinc900;
+    padding: 0;
+    margin: 0;
+    border-spacing: 0;
+}
+
+/* Rows and padding follow the wallpaper's 3px grid. */
+.match {
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    border-spacing: 0;
+}
+
+row.match {
+    min-height: 33px;
+}
+
+/* Apply padding once, on the row's direct content box. */
+row.match > box {
+    padding: 6px;
+    margin: 0;
+    border-spacing: 0;
+}
+
+/* Result text */
+.title,
+.description,
+.prefix {
+    min-height: 21px;
+    font-family: "Red Hat Mono";
+    font-weight: normal;
+    padding: 0;
+    margin: 0;
+}
+
+.calculation-operation,
+.calculation-equals {
+    min-height: 21px;
+    font-family: "Red Hat Mono";
+    font-size: 15px;
+    font-weight: 600;
+    font-style: normal;
+    color: @zinc400;
+    padding: 0;
+    margin: 0;
+}
+
+.title {
+    font-size: 15px;
+    font-weight: 600;
+    color: @zinc50;
+}
+
+.description {
+    font-size: 15px;
+    color: @zinc400;
+    font-style: italic;
+}
+
+.prefix {
+    font-size: 15px;
+    color: @zinc400;
+}
+
+.text-fields > .title-row {
+    padding: 0;
+}
+
+/* Hover */
+.match:hover {
+    background: @zinc700;
+}
+
+.prefix-help .match:hover {
+    background: transparent;
+}
+
+.prefix-help row.match > box {
+    padding: 6px;
+}

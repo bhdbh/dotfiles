@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=ncmpcpp
+GenericName=Music Player
+GenericName[pt_BR]=Reprodutor de música
+Comment=Play music with MPD in Foot
+Icon=multimedia-audio-player
+TryExec=/usr/bin/ncmpcpp
+Exec=@HOME@/.local/libexec/mpd-open %F
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/mp3;audio/flac;audio/x-flac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aac;audio/x-aac;audio/mp4;audio/x-m4a;audio/m4a;audio/x-ms-wma;audio/aiff;audio/x-aiff;audio/x-ape;audio/x-wavpack;audio/x-tta;audio/x-matroska;audio/webm;application/ogg;
+Keywords=Music;MPD;Audio;Player;
+Keywords[pt_BR]=Música;Áudio;Reprodutor;

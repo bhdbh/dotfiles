@@ -1,0 +1,97 @@
+{
+  "layer": "top",
+  "position": "top",
+  "output": "HDMI-A-1",
+  "spacing": 0,
+  "margin": "6 6 0 6",
+  "expand-center": true,
+  "fixed-center": false,
+  "modules-left": [
+    "sway/workspaces",
+    "cffi/optical-spacing",
+    "cffi/hit-areas"
+  ],
+  "modules-center": [
+    "cffi/clock"
+  ],
+  "modules-right": [
+    "group/cpu-status",
+    "cffi/memory",
+    "cffi/network",
+    "cffi/volume",
+    "cffi/battery"
+  ],
+  "sway/workspaces": {
+    "disable-scroll": true,
+    "all-outputs": false,
+    "format": "{name}",
+    "tooltip": false
+  },
+  "cffi/clock": {
+    "module_path": "@HOME@/.config/waybar/scripts/clock-control.so",
+    "expand": true,
+    "cursor": 68,
+    "tooltip": false
+  },
+  "cffi/volume": {
+    "module_path": "@HOME@/.config/waybar/scripts/volume-control.so",
+    "tooltip": false,
+    "cursor": 68
+  },
+  "group/cpu-status": {
+    "orientation": "horizontal",
+    "modules": [
+      "cffi/cpu",
+      "cffi/divider#cpu",
+      "temperature"
+    ],
+    "cursor": 68,
+    "tooltip": false
+  },
+  "temperature": {
+    "hwmon-path-abs": "/sys/devices/pci0000:00/0000:00:18.3/hwmon",
+    "input-filename": "temp1_input",
+    "format": "{temperatureC}\u00b0C",
+    "warning-threshold": 76,
+    "critical-threshold": 86,
+    "interval": 3,
+    "cursor": 68,
+    "tooltip": false
+  },
+  "cffi/divider#cpu": {
+    "module_path": "@HOME@/.config/waybar/scripts/item-divider.so",
+    "cursor": 68,
+    "tooltip": false
+  },
+  "cffi/battery": {
+    "module_path": "@HOME@/.config/waybar/scripts/battery-control.so",
+    "tooltip": false,
+    "cursor": 68
+  },
+  "cffi/network": {
+    "module_path": "@HOME@/.config/waybar/scripts/metric-control.so",
+    "kind": "network",
+    "tooltip": false,
+    "on-click": "foot --title='Wi-Fi' @HOME@/.local/bin/nmtui"
+  },
+  "cffi/cpu": {
+    "module_path": "@HOME@/.config/waybar/scripts/metric-control.so",
+    "kind": "cpu",
+    "tooltip": false,
+    "cursor": 68
+  },
+  "cffi/memory": {
+    "module_path": "@HOME@/.config/waybar/scripts/metric-control.so",
+    "kind": "memory",
+    "tooltip": false,
+    "cursor": 68
+  },
+  "cffi/optical-spacing": {
+    "module_path": "@HOME@/.config/waybar/scripts/optical-spacing.so",
+    "tooltip": false
+  },
+  "cffi/hit-areas": {
+    "module_path": "@HOME@/.config/waybar/scripts/hit-areas.so",
+    "tooltip": false
+  }
+}

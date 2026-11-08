@@ -1,0 +1,954 @@
+#include "config.h"
+#include "logger.h"
+#include "uri.h"
+#include "xdptf.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <wordexp.h>
+
+#define PATH_PREFIX "file://"
+#define PATH_PORTAL_BASE "/tmp/termfilechooser"
+
+static const char instructions[] =
+    "* xdg-desktop-portal-termfilechooser instructions *\n"
+    "---------------------------------------------------\n\n"
+    "\t\t\t!!! WARNING !!!\n"
+    "Opening a file OVERWRITES it!\n\n"
+    "How to save *this* file:\n"
+    "1) Move the file to your \n"
+    "   desired location.\n"
+    "2) Rename the file if needed.\n"
+    "3) Open the file.\n\n"
+    "Tips:\n"
+    "- If you quit without opening\n"
+    "  a file, the save operation\n"
+    "  is cancelled."
+    "\n\n---------------------------------------------------\n"
+    "* xdg-desktop-portal-termfilechooser instructions *";
+
+static const char object_path[] = "/org/freedesktop/portal/desktop";
+static const char interface_name[] = "org.freedesktop.impl.portal.FileChooser";
+
+static int exec_filechooser(void *data, bool writing, bool multiple,
+                            bool directory, char *path, char ***selected_files,
+                            size_t *num_selected_files)
+{
+    struct xdptf_state *state = data;
+    char *cmd_script = state->config->cmd;
+    if (!cmd_script) {
+        logprint(ERROR, "filechooser: cmd not specified");
+        return -1;
+    }
+
+    uid_t uid = getuid();
+    size_t filename_size =
+        1 + snprintf(NULL, 0, "%s-%u.portal", PATH_PORTAL_BASE, uid);
+    char *filename = malloc(filename_size);
+    snprintf(filename, filename_size, "%s-%u.portal", PATH_PORTAL_BASE, uid);
+
+    logprint(DEBUG, "filechooser: output path: %s", filename);
+
+    if (access(filename, F_OK) == 0) {
+        if (access(filename, R_OK | W_OK) != 0) {
+            logprint(ERROR, "filechooser: cannot read/write '%s'", filename);
+            free(filename);
+            return -1;
+        }
+        // clear contents
+        FILE *fp = fopen(filename, "w");
+        if (fp == NULL) {
+            logprint(ERROR, "filechooser: could not open '%s'", filename);
+            free(filename);
+            return -1;
+        }
+        if (fclose(fp) != 0) {
+            logprint(ERROR, "filechooser: could not close '%s'", filename);
+            free(filename);
+            return -1;
+        }
+    }
+
+    char *args[] = {cmd_script,
+                    multiple ? "1" : "0",
+                    directory ? "1" : "0",
+                    writing ? "1" : "0",
+                    path ? path : "",
+                    filename,
+                    get_logger_level() >= DEBUG ? "1" : "0"};
+
+    struct environment *env = state->config->env;
+    for (int i = 0, ret = 0; i < env->num_vars; i++) {
+        logprint(TRACE, "filechooser: setting env: %s=%s", env->vars[i].name,
+                 env->vars[i].value);
+        ret = setenv(env->vars[i].name, env->vars[i].value, 1);
+        if (ret) {
+            logprint(WARN, "filechooser: could not set env '%s': %s",
+                     env->vars[i].name, strerror(errno));
+        }
+    }
+
+    char *termcmd = getenv("TERMCMD");
+    char *termcmd_fallback = "kitty --title 'termfilechooser'";
+    if (!termcmd)
+        termcmd = termcmd_fallback;
+    wordexp_t exp;
+    exp.we_offs = sizeof args / sizeof args[0];
+    int ret = wordexp(termcmd, &exp, WRDE_NOCMD | WRDE_UNDEF | WRDE_DOOFFS);
+    if (ret == WRDE_NOSPACE) {
+        logprint(ERROR, "filechooser: TERMCMD expansion failed; out of memory");
+        free(filename);
+        return -1;
+    }
+    if (ret && termcmd != termcmd_fallback) {
+        switch (ret) {
+            case WRDE_BADCHAR:
+                logprint(WARN, "filechooser: TERMCMD contains an illegal "
+                               "character, falling back to default");
+                break;
+            case WRDE_BADVAL:
+                logprint(WARN, "filechooser: TERMCMD contains an undefined "
+                               "shell variable, falling back to default");
+                break;
+            case WRDE_CMDSUB:
+                logprint(WARN, "filechooser: TERMCMD contains a command "
+                               "substitution, falling back to default");
+                break;
+            case WRDE_SYNTAX:
+                logprint(WARN, "filechooser: TERMCMD has a shell syntax error, "
+                               "falling back to default");
+                break;
+        }
+        ret = wordexp(termcmd_fallback, &exp,
+                      WRDE_NOCMD | WRDE_UNDEF | WRDE_DOOFFS);
+        if (ret) {
+            logprint(ERROR,
+                     "filechooser: TERMCMD expansion failed; out of memory");
+            free(filename);
+            return -1;
+        }
+    }
+
+    for (size_t i = 0; i < exp.we_offs; i++) {
+        exp.we_wordv[i] = args[i];
+    }
+    char **wrapper_args = exp.we_wordv;
+    size_t num_wrapper_args =
+        exp.we_offs + exp.we_wordc; // ending NULL excluded
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        logprint(ERROR, "filechooser: fork failed: %d", strerror(errno));
+        wordfree(&exp);
+        free(filename);
+        return -1;
+    } else if (pid == 0) {
+        // Child process
+        if (get_logger_level() >= DEBUG) {
+            size_t cmd_size = 1;
+            for (size_t i = 0; i < num_wrapper_args; i++) {
+                if (wrapper_args[i]) {
+                    cmd_size +=
+                        strlen(wrapper_args[i]) + 2; // tab + newline characters
+                }
+            }
+            char *cmd = malloc(cmd_size);
+            if (cmd) {
+                char *p = cmd;
+                for (size_t i = 0; i < num_wrapper_args; i++) {
+                    if (wrapper_args[i]) {
+                        *p++ = '\t';
+                        size_t len = strlen(wrapper_args[i]);
+                        memcpy(p, wrapper_args[i], len);
+                        p += len;
+                        *p++ = '\n';
+                    }
+                }
+                *p = '\0';
+                logprint(DEBUG, "filechooser: executing command:\n%s", cmd);
+                free(cmd);
+            }
+        }
+        execvp(cmd_script, (char *const *)wrapper_args);
+        logprint(ERROR, "filechooser: execvp failed: %s", strerror(errno));
+        remove(filename);
+        wordfree(&exp);
+        free(filename);
+        _exit(EXIT_FAILURE);
+    } else {
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+        wordfree(&exp);
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            logprint(ERROR, "filechooser: command failed with status '%d'",
+                     WEXITSTATUS(status));
+            free(filename);
+            return -1;
+        }
+    }
+
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+        logprint(ERROR, "filechooser: failed to open '%s'", filename);
+        free(filename);
+        return -1;
+    }
+
+    size_t nchars = 0, num_lines = 0;
+    int cr;
+    while ((cr = getc(fp)) != EOF) {
+        if (cr == '\n') {
+            if (nchars > 0)
+                num_lines++;
+            nchars = 0;
+        } else {
+            nchars++;
+        }
+
+        if (ferror(fp)) {
+            fclose(fp);
+            remove(filename);
+            free(filename);
+            return -1;
+        }
+    }
+
+    // last line
+    if (nchars > 0)
+        num_lines++;
+
+    // rewind
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        remove(filename);
+        free(filename);
+        return -1;
+    }
+
+    if (num_lines == 0) {
+        fclose(fp);
+        remove(filename);
+        free(filename);
+        return -1;
+    }
+
+    *num_selected_files = num_lines;
+    *selected_files = malloc((1 + num_lines) * sizeof(char *));
+
+    for (size_t i = 0; i < num_lines; i++) {
+        size_t n = 0;
+        char *line = NULL;
+        char *encoded = NULL;
+        ssize_t nread = getline(&line, &n, fp);
+        if (ferror(fp)) {
+            free(line);
+            for (size_t j = 0; j < i - 1; j++) {
+                free((*selected_files)[j]);
+            }
+            free(*selected_files);
+            fclose(fp);
+            remove(filename);
+            free(filename);
+            return -1;
+        }
+        // if all chars are encoded, size = orig_size * 3 + 1
+        encoded = malloc(1 + nread * 3);
+        size_t nenc = uri_encode(line, nread, encoded);
+        size_t str_size = 1 + nenc + strlen(PATH_PREFIX);
+        // check last char equal '\n'
+        if (nenc >= 3 && !strcmp(encoded + nenc - 3, "%0A")) {
+            str_size -= 3;
+        }
+        (*selected_files)[i] = malloc(str_size);
+        snprintf((*selected_files)[i], str_size, "%s%s", PATH_PREFIX, encoded);
+        free(line);
+        free(encoded);
+    }
+    (*selected_files)[num_lines] = NULL;
+
+    fclose(fp);
+    remove(filename);
+    free(filename);
+    return 0;
+}
+
+static char *escape_path(char *path)
+{
+    // escape ' with '\'' in path
+    char *tmp = path;
+    size_t escaped_size = 0;
+    while (*tmp) {
+        escaped_size += (*tmp == '\'') ? 4 : 1;
+        tmp++;
+    }
+    escaped_size += 1;
+    char *escaped_path = malloc(escaped_size);
+    char *ptr = escaped_path;
+    tmp = path;
+    while (*tmp) {
+        if (*tmp == '\'') {
+            *ptr++ = '\'';
+            *ptr++ = '\\';
+            *ptr++ = '\'';
+            *ptr++ = '\'';
+        } else {
+            *ptr++ = *tmp;
+        }
+        tmp++;
+    }
+    *ptr = '\0';
+    return escaped_path;
+}
+
+static char *get_last_dir_path(void)
+{
+    char *home = getenv("HOME");
+    char *state_home = getenv("XDG_STATE_HOME");
+    char *file_path = "xdg-desktop-portal-termfilechooser";
+    char *path = NULL;
+
+    if (state_home) {
+        size_t path_size =
+            1 + snprintf(NULL, 0, "%s/%s", state_home, file_path);
+        path = malloc(path_size);
+        snprintf(path, path_size, "%s/%s", state_home, file_path);
+    } else if (home) {
+        size_t path_size =
+            1 + snprintf(NULL, 0, "%s/.local/state/%s", home, file_path);
+        path = malloc(path_size);
+        snprintf(path, path_size, "%s/.local/state/%s", home, file_path);
+    }
+
+    if (path) {
+        struct stat st = {0};
+        if (stat(path, &st) == -1) {
+            mkdir(path, 0755);
+        }
+    }
+
+    return path;
+}
+
+static char *read_last_dir(void)
+{
+    char *path = get_last_dir_path();
+    if (path == NULL) {
+        return NULL;
+    }
+
+    char *filename = NULL;
+
+    size_t filename_size = 1 + snprintf(NULL, 0, "%s/last_dir", path);
+    filename = malloc(filename_size);
+    snprintf(filename, filename_size, "%s/last_dir", path);
+
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+        logprint(WARN, "filechooser: failed to open '%s'", filename);
+        free(filename);
+        free(path);
+        return NULL;
+    }
+
+    char *last_dir = NULL;
+    size_t n = 0;
+    ssize_t nread = getline(&last_dir, &n, fp);
+
+    if (nread <= 0) {
+        if (ferror(fp)) {
+            logprint(ERROR, "filechooser: failed to read '%s'", filename);
+        } else {
+            logprint(ERROR, "filechooser: no data read from '%s'", filename);
+        }
+        free(last_dir);
+        free(filename);
+        free(path);
+        fclose(fp);
+        return NULL;
+    }
+
+    if (last_dir[nread - 1] == '\n') {
+        last_dir[nread - 1] = '\0';
+    }
+
+    fclose(fp);
+    free(filename);
+    free(path);
+
+    return last_dir;
+}
+
+static void write_last_dir(char *last_dir)
+{
+    if (last_dir == NULL)
+        return;
+
+    char *path = get_last_dir_path();
+    if (path == NULL) {
+        return;
+    }
+
+    char *filename = NULL;
+
+    size_t filename_size = 1 + snprintf(NULL, 0, "%s/last_dir", path);
+    filename = malloc(filename_size);
+    snprintf(filename, filename_size, "%s/last_dir", path);
+
+    FILE *fp = fopen(filename, "w");
+    if (fp == NULL) {
+        logprint(ERROR, "filechooser: failed to open '%s': %s", filename,
+                 strerror(errno));
+        free(filename);
+        free(path);
+    }
+
+    fputs(last_dir, fp);
+    fputc('\n', fp);
+
+    fclose(fp);
+    free(filename);
+    free(path);
+}
+
+static void set_last_dir(char *encoded_selection)
+{
+    char *encoded = encoded_selection + strlen(PATH_PREFIX);
+
+    char *last_selected = malloc(1 + strlen(encoded));
+    uri_decode(encoded, strlen(encoded), last_selected);
+
+    struct stat path_stat = {0};
+    if (stat(last_selected, &path_stat) == -1) {
+        if (errno == ENOENT) {
+            logprint(ERROR, "filechooser: '%s' does not exist.", last_selected);
+        } else {
+            logprint(ERROR, "filechooser: failed to stat '%s': %s",
+                     last_selected, strerror(errno));
+        }
+        free(last_selected);
+        return;
+    }
+
+    if (S_ISDIR(path_stat.st_mode)) {
+        write_last_dir(last_selected);
+    } else if (S_ISREG(path_stat.st_mode)) {
+        char *parent = strdup(last_selected);
+        char *last_slash = strrchr(parent, '/');
+        if (last_slash) {
+            if (last_slash != parent) {
+                *last_slash = '\0';
+            } else {
+                *++last_slash = '\0';
+            }
+        } else {
+            free(parent);
+            parent = NULL;
+        }
+        write_last_dir(parent);
+        free(parent);
+    }
+    free(last_selected);
+}
+
+static void set_current_folder(enum Mode *mode, char **default_dir,
+                               char **current_folder)
+{
+    switch (*mode) {
+        case MODE_SUGGESTED_DIR:
+            if (*current_folder != NULL)
+                *current_folder = strdup(*current_folder);
+            break;
+        case MODE_DEFAULT_DIR:
+            *current_folder = strdup(*default_dir);
+            break;
+        case MODE_LAST_DIR:
+            *current_folder = read_last_dir();
+            break;
+    }
+
+    if (*current_folder == NULL) {
+        if (*default_dir != NULL) {
+            *current_folder = strdup(*default_dir);
+            logprint(
+                DEBUG,
+                "filechooser: could not set current_folder; fallback to '%s'",
+                *current_folder);
+        } else {
+            logprint(WARN, "filechooser: could not set current_folder");
+        }
+    } else if (access(*current_folder, F_OK)) {
+        if (*mode != MODE_DEFAULT_DIR && *default_dir != NULL) {
+            free(*current_folder);
+            *current_folder = strdup(*default_dir);
+            logprint(
+                DEBUG,
+                "filechooser: could not set current_folder; fallback to '%s'",
+                *current_folder);
+        } else {
+            free(*current_folder);
+            *current_folder = NULL;
+            logprint(WARN, "filechooser: could not set current_folder");
+        }
+    }
+}
+
+static int method_open_file(sd_bus_message *msg, void *data,
+                            sd_bus_error *ret_error)
+{
+    int ret = 0;
+
+    char *handle, *app_id, *parent_window, *title;
+    ret = sd_bus_message_read(msg, "osss", &handle, &app_id, &parent_window,
+                              &title);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = sd_bus_message_enter_container(msg, 'a', "{sv}");
+    if (ret < 0) {
+        return ret;
+    }
+    char *key;
+    int inner_ret = 0;
+    int multiple = 0, directory = 0;
+    char *current_folder = NULL;
+    while ((ret = sd_bus_message_enter_container(msg, 'e', "sv")) > 0) {
+        inner_ret = sd_bus_message_read(msg, "s", &key);
+        if (inner_ret < 0) {
+            return inner_ret;
+        }
+
+        logprint(DEBUG, "dbus: option %s", key);
+        if (strcmp(key, "multiple") == 0) {
+            sd_bus_message_read(msg, "v", "b", &multiple);
+            logprint(DEBUG, "dbus: option multiple: %d", multiple);
+        } else if (strcmp(key, "modal") == 0) {
+            int modal;
+            sd_bus_message_read(msg, "v", "b", &modal);
+            logprint(DEBUG, "dbus: option modal: %d", modal);
+        } else if (strcmp(key, "directory") == 0) {
+            sd_bus_message_read(msg, "v", "b", &directory);
+            logprint(DEBUG, "dbus: option directory: %d", directory);
+        } else if (strcmp(key, "current_folder") == 0) {
+            const void *p = NULL;
+            size_t sz = 0;
+            inner_ret = sd_bus_message_enter_container(msg, 'v', "ay");
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_read_array(msg, 'y', &p, &sz);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_exit_container(msg);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+
+            current_folder = (char *)p;
+            logprint(DEBUG, "dbus: option current_folder: %s", current_folder);
+        } else {
+            logprint(WARN, "dbus: unknown option %s", key);
+            sd_bus_message_skip(msg, "v");
+        }
+
+        inner_ret = sd_bus_message_exit_container(msg);
+        if (inner_ret < 0) {
+            return inner_ret;
+        }
+    }
+    if (ret < 0) {
+        return ret;
+    }
+    ret = sd_bus_message_exit_container(msg);
+    if (ret < 0) {
+        return ret;
+    }
+
+    struct xdptf_request *req =
+        xdptf_request_create(sd_bus_message_get_bus(msg), handle);
+    if (req == NULL) {
+        return -ENOMEM;
+    }
+
+    struct xdptf_state *state = data;
+    char **selected_files = NULL;
+    size_t num_selected_files = 0;
+
+    set_current_folder(&state->config->modes->open_mode,
+                       &state->config->default_dir, &current_folder);
+
+    char *escaped_path = escape_path(current_folder);
+    ret = exec_filechooser(data, false, multiple, directory, escaped_path,
+                           &selected_files, &num_selected_files);
+
+    free(current_folder);
+    if (ret) {
+        goto cleanup;
+    }
+
+    logprint(INFO, "filechooser: (OpenFile) Number of selected files: %d",
+             num_selected_files);
+    for (size_t i = 0; i < num_selected_files; i++) {
+        logprint(DEBUG, "filechooser: %d. %s", i, selected_files[i]);
+    }
+
+    if (state->config->modes->open_mode == MODE_LAST_DIR) {
+        set_last_dir(selected_files[num_selected_files - 1]);
+    }
+
+    sd_bus_message *reply = NULL;
+    ret = sd_bus_message_new_method_return(msg, &reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append(reply, "u", PORTAL_RESPONSE_SUCCESS, 1);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'a', "{sv}");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'e', "sv");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append_basic(reply, 's', "uris");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'v', "as");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append_strv(reply, selected_files);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_send(NULL, reply, NULL);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    sd_bus_message_unref(reply);
+
+cleanup:
+    for (size_t i = 0; i < num_selected_files; i++) {
+        free(selected_files[i]);
+    }
+    free(selected_files);
+    free(escaped_path);
+
+    xdptf_request_destroy(req);
+    return ret;
+}
+
+static int method_save_file(sd_bus_message *msg, void *data,
+                            sd_bus_error *ret_error)
+{
+    int ret = 0;
+
+    char *handle, *app_id, *parent_window, *title;
+    ret = sd_bus_message_read(msg, "osss", &handle, &app_id, &parent_window,
+                              &title);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = sd_bus_message_enter_container(msg, 'a', "{sv}");
+    if (ret < 0) {
+        return ret;
+    }
+    char *key;
+    int inner_ret = 0;
+    char *current_name = NULL;
+    char *current_folder = NULL;
+    while ((ret = sd_bus_message_enter_container(msg, 'e', "sv")) > 0) {
+        inner_ret = sd_bus_message_read(msg, "s", &key);
+        if (inner_ret < 0) {
+            return inner_ret;
+        }
+
+        logprint(DEBUG, "dbus: option %s", key);
+        if (strcmp(key, "current_name") == 0) {
+            sd_bus_message_read(msg, "v", "s", &current_name);
+            logprint(DEBUG, "dbus: option current_name: %s", current_name);
+        } else if (strcmp(key, "current_folder") == 0) {
+            const void *p = NULL;
+            size_t sz = 0;
+            inner_ret = sd_bus_message_enter_container(msg, 'v', "ay");
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_read_array(msg, 'y', &p, &sz);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_exit_container(msg);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+
+            current_folder = (char *)p;
+            logprint(DEBUG, "dbus: option current_folder: %s", current_folder);
+        } else if (strcmp(key, "current_file") == 0) {
+            // saving existing file
+            const void *p = NULL;
+            size_t sz = 0;
+            inner_ret = sd_bus_message_enter_container(msg, 'v', "ay");
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_read_array(msg, 'y', &p, &sz);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+            inner_ret = sd_bus_message_exit_container(msg);
+            if (inner_ret < 0) {
+                return inner_ret;
+            }
+
+            current_name = (char *)p;
+            logprint(DEBUG,
+                     "dbus: option replace current_name with current_file: %s",
+                     current_name);
+        } else {
+            logprint(WARN, "dbus: unknown option %s", key);
+            sd_bus_message_skip(msg, "v");
+        }
+
+        inner_ret = sd_bus_message_exit_container(msg);
+        if (inner_ret < 0) {
+            return inner_ret;
+        }
+    }
+
+    struct xdptf_state *state = data;
+    struct xdptf_request *req =
+        xdptf_request_create(sd_bus_message_get_bus(msg), handle);
+    if (req == NULL) {
+        return -ENOMEM;
+    }
+
+    set_current_folder(&state->config->modes->save_mode,
+                       &state->config->default_dir, &current_folder);
+
+    if (current_name == NULL || *current_name == '\0') {
+        current_name = "termfilechooser.tmp";
+    }
+
+    char *name = strrchr(current_name, '/');
+    if (name) {
+        if (*(name + 1) != '\0') {
+            current_name = ++name;
+        } else {
+            current_name = "termfilechooser.tmp";
+        }
+    }
+
+    size_t num_selected_files = 0;
+    size_t path_size = 2 + strlen(current_folder) + strlen(current_name);
+    char **selected_files = NULL;
+    char *path = malloc(path_size);
+    snprintf(path, path_size, "%s/%s", current_folder, current_name);
+
+    free(current_folder);
+
+    if (state->config->create_help_file == 1) {
+        const char *extension = strrchr(current_name, '.');
+        if (extension == NULL || extension == current_name) {
+            extension = "";
+        }
+        char *path_stem = strndup(path, strlen(path) - strlen(extension));
+
+        for (size_t i = 1; access(path, F_OK) == 0; i++) {
+            path_size =
+                1 + snprintf(NULL, 0, "%s_%zu%s", path_stem, i, extension);
+            path = realloc(path, path_size);
+            snprintf(path, path_size, "%s_%zu%s", path_stem, i, extension);
+        }
+        free(path_stem);
+
+        FILE *temp_file = fopen(path, "w");
+        if (temp_file == NULL) {
+            logprint(ERROR, "filechooser: could not write temporary file");
+            return -1;
+        }
+        fputs(instructions, temp_file);
+        fclose(temp_file);
+    }
+
+    char *escaped_path = escape_path(path);
+
+    ret = exec_filechooser(data, true, false, false, escaped_path,
+                           &selected_files, &num_selected_files);
+
+    logprint(INFO, "filechooser: (SaveFile) Number of selected files: %d",
+             num_selected_files);
+
+    if (ret || num_selected_files != 1) {
+        // if file created
+        if (state->config->create_help_file == 1) {
+            remove(path);
+        }
+        if (num_selected_files > 1) {
+            logprint(ERROR, "filechooser: too many selected SaveFiles");
+        }
+        goto cleanup;
+    }
+
+    // if file created
+    if (state->config->create_help_file == 1) {
+        char *decoded = NULL;
+        logprint(DEBUG, "filechooser: %s", selected_files[0]);
+        decoded = malloc(1 + strlen(selected_files[0]));
+        uri_decode(selected_files[0], strlen(selected_files[0]), decoded);
+
+        struct stat statbuf;
+        if (stat(decoded + strlen(PATH_PREFIX), &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                logprint(ERROR,
+                         "filechooser: selected SaveFile is a directory");
+                free(decoded);
+                goto cleanup;
+            }
+        } else {
+            logprint(ERROR, "filechooser: failed to stat '%s': %s",
+                     decoded + strlen(PATH_PREFIX), strerror(errno));
+            free(decoded);
+            goto cleanup;
+        }
+
+        if (strcmp(decoded + strlen(PATH_PREFIX), path) != 0) {
+            remove(path);
+        }
+        free(decoded);
+    }
+
+    if (state->config->modes->save_mode == MODE_LAST_DIR) {
+        set_last_dir(selected_files[num_selected_files - 1]);
+    }
+
+    sd_bus_message *reply = NULL;
+    ret = sd_bus_message_new_method_return(msg, &reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append(reply, "u", PORTAL_RESPONSE_SUCCESS, 1);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'a', "{sv}");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'e', "sv");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append_basic(reply, 's', "uris");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_open_container(reply, 'v', "as");
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_append_strv(reply, selected_files);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_message_close_container(reply);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    ret = sd_bus_send(NULL, reply, NULL);
+    if (ret < 0) {
+        goto cleanup;
+    }
+
+    sd_bus_message_unref(reply);
+
+cleanup:
+    for (size_t i = 0; i < num_selected_files; i++) {
+        free(selected_files[i]);
+    }
+    free(selected_files);
+    free(escaped_path);
+    free(path);
+
+    xdptf_request_destroy(req);
+    return ret;
+}
+
+static const sd_bus_vtable filechooser_vtable[] = {
+    SD_BUS_VTABLE_START(0),
+    SD_BUS_METHOD("OpenFile", "osssa{sv}", "ua{sv}", method_open_file,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("SaveFile", "osssa{sv}", "ua{sv}", method_save_file,
+                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_VTABLE_END};
+
+int xdptf_filechooser_init(struct xdptf_state *state)
+{
+    sd_bus_slot *slot = NULL;
+    logprint(DEBUG, "dbus: init %s", interface_name);
+    int ret;
+    ret = sd_bus_add_object_vtable(state->bus, &slot, object_path,
+                                   interface_name, filechooser_vtable, state);
+    if (ret < 0) {
+        logprint(ERROR, "dbus: filechooser init failed: %s", strerror(-ret));
+    }
+
+    return ret;
+}

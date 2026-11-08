@@ -1,0 +1,31 @@
+#!/usr/bin/python3
+"""Adjust the laptop panel brightness through the active login session."""
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+if len(sys.argv) != 2 or sys.argv[1] not in ("up", "down"):
+    raise SystemExit("Usage: laptop-brightness up|down")
+
+runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+with (runtime / "laptop-brightness.lock").open("a") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    backlights = sorted(Path("/sys/class/backlight").glob("amdgpu_bl*"))
+    if not backlights:
+        backlights = sorted(Path("/sys/class/backlight").iterdir())
+    if not backlights:
+        raise SystemExit("No display backlight found")
+    device = backlights[0]
+    maximum = int((device / "max_brightness").read_text())
+    current = int((device / "brightness").read_text())
+    step = max(1, round(maximum * 0.05))
+    minimum = max(1, round(maximum * 0.01))
+    direction = 1 if sys.argv[1] == "up" else -1
+    target = max(minimum, min(maximum, current + direction * step))
+    subprocess.run([
+        "/usr/bin/busctl", "--system", "call", "org.freedesktop.login1",
+        "/org/freedesktop/login1/session/auto", "org.freedesktop.login1.Session",
+        "SetBrightness", "ssu", "backlight", device.name, str(target),
+    ], check=True)

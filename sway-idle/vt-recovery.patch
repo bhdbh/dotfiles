@@ -1,0 +1,264 @@
+--- a/main.c
++++ b/main.c
+@@ -27,6 +27,7 @@
+ #include <pwd.h>
+ #include <signal.h>
+ #include <security/pam_misc.h>
++#include <syslog.h>
+ 
+ static int oldvt;
+ static vt_t vt;
+@@ -34,6 +35,7 @@
+ static int oldprintk;
+ static pid_t chpid;
+ static int locked;
++static int authenticated;
+ static userinfo_t root, user;
+ 
+ static struct pam_conv conv = {
+@@ -72,20 +74,30 @@
+ 		return;
+ 	free_user(&user);
+ 	free_user(&root);
+-	close(0);
+-	close(1);
+-	close(2);
+ 	if (oldprintk > 1)
+ 		write_int_to_file(PRINTK_PATH, oldprintk);
+-	if (locked)
++	if (locked) {
++		syslog(LOG_ERR, "Exiting while locked; refusing to unlock VT switching");
+ 		return;
++	}
+ 	if (oldsysrq > 0)
+ 		write_int_to_file(SYSRQ_PATH, oldsysrq);
+ 	if (vt.fd >= 0)
+ 		vt_reset(&vt);
++	if (authenticated && vt.ios != NULL) {
++		fprintf(vt.ios, "Senha aceita. Retornando para tty%d...\n", oldvt);
++		fflush(vt.ios);
++	}
+ 	vt_lock_switch(0);
+-	vt_release(&vt, oldvt);
++	if (vt_release(&vt, oldvt) < 0 && authenticated && vt.ios != NULL) {
++		fprintf(vt.ios, "A senha foi aceita, mas a sessao grafica nao respondeu.\n"
++		        "Use Ctrl+Alt+F%d para tentar voltar a sessao.\n", oldvt);
++		fflush(vt.ios);
++	}
+ 	vt_destroy();
++	close(0);
++	close(1);
++	close(2);
+ }
+ 
+ void sa_handler_exit(int signum) {
+@@ -105,6 +117,9 @@
+ 
+ int main(int argc, char **argv) {
+ 	int try = 0, root_user = 1;
++	int ready_pipe[2] = { -1, -1 };
++	char ready_byte;
++	ssize_t ready_count;
+ 	uid_t owner;
+ 	userinfo_t *u = &user;
+ 
+@@ -113,6 +128,7 @@
+ 
+ 	error_init(2);
+ 	parse_options(argc, argv);
++	openlog("sway-tty-lock", LOG_PID, LOG_AUTHPRIV);
+ 
+ 	if (geteuid() != 0)
+ 		error(EXIT_FAILURE, 0, "Must be root!");
+@@ -123,6 +139,7 @@
+ 	setup_signal(SIGINT, SIG_IGN);
+ 	setup_signal(SIGUSR1, SIG_IGN);
+ 	setup_signal(SIGUSR2, SIG_IGN);
++	setup_signal(SIGPIPE, SIG_IGN);
+ 
+ 	vt_init();
+ 	vt_get_current(&oldvt, &owner);
+@@ -160,15 +177,26 @@
+ 
+ 	vt_lock_switch(0);
+ 	vt_acquire(&vt);
+-	vt_lock_switch(1);
++	if (vt_lock_switch(1) < 0)
++		error(EXIT_FAILURE, 0, "Could not lock VT switching");
+ 
+ 	if (options->detach) {
++		if (pipe(ready_pipe) < 0)
++			error(EXIT_FAILURE, errno, "readiness pipe");
+ 		chpid = fork();
+ 		if (chpid < 0) {
+ 			error(EXIT_FAILURE, errno, "fork");
+ 		} else if (chpid > 0) {
++			close(ready_pipe[1]);
++			do {
++				ready_count = read(ready_pipe[0], &ready_byte, 1);
++			} while (ready_count < 0 && errno == EINTR);
++			close(ready_pipe[0]);
++			if (ready_count != 1 || ready_byte != '1')
++				error(EXIT_FAILURE, 0, "Locker did not become ready");
+ 			return 0;
+ 		} else {
++			close(ready_pipe[0]);
+ 			setsid();
+ 			sleep(1); /* w/o this, accessing the vt might fail */
+ 			vt_reopen(&vt);
+@@ -185,6 +213,14 @@
+ 	}
+ 
+ 	locked = 1;
++	syslog(LOG_NOTICE, "Locked tty%d for session tty%d", vt.nr, oldvt);
++	if (ready_pipe[1] >= 0) {
++		ready_byte = '1';
++		do {
++			ready_count = write(ready_pipe[1], &ready_byte, 1);
++		} while (ready_count < 0 && errno == EINTR);
++		close(ready_pipe[1]);
++	}
+ 	if (options->blank)
+ 		vt_blank_until_key(&vt);
+ 
+@@ -201,6 +237,8 @@
+ 		switch (u->pam_status) {
+ 		case PAM_SUCCESS:
+ 			pam_setcred(u->pamh, PAM_REFRESH_CRED);
++			authenticated = 1;
++			syslog(LOG_NOTICE, "Authentication succeeded; restoring session tty%d", oldvt);
+ 			locked = 0;
+ 			break;
+ 		case PAM_AUTH_ERR:
+--- a/vt.c
++++ b/vt.c
+@@ -29,9 +29,49 @@
+ #include <sys/stat.h>
+ #include <sys/ioctl.h>
+ #include <errno.h>
++#include <time.h>
++#include <syslog.h>
+ 
+ static int fd = -1;
+ static char filename[1024];
++
++static long long monotonic_ms(void) {
++	struct timespec now;
++	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
++		return -1;
++	return (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
++}
++
++/* A VT switch can be lost during resume. Reissue it instead of waiting
++ * indefinitely in VT_WAITACTIVE, and leave recovery keys usable on failure. */
++static int activate_vt(int nr) {
++	struct vt_stat state;
++	const struct timespec pause = { 0, 50000000 };
++	long long start = monotonic_ms(), now, requested = -1;
++	if (start < 0)
++		return -1;
++	for (;;) {
++		now = monotonic_ms();
++		if (now < 0)
++			return -1;
++		if (now - start >= 5000) {
++			errno = ETIMEDOUT;
++			return -1;
++		}
++		if (ioctl(fd, VT_GETSTATE, &state) == 0) {
++			if (state.v_active == nr)
++				return 0;
++		} else if (errno != EINTR) {
++			return -1;
++		}
++		if (requested < 0 || now - requested >= 500) {
++			if (ioctl(fd, VT_ACTIVATE, nr) < 0 && errno != EINTR)
++				return -1;
++			requested = now;
++		}
++		nanosleep(&pause, NULL);
++	}
++}
+ 
+ void vt_init() {
+ 	while ((fd = open(CONSOLE_DEVICE, O_RDWR)) == -1 && errno == EINTR);
+@@ -91,14 +131,11 @@
+ 		error(EXIT_FAILURE, errno, "%s", filename);
+ 	vt->fd = fileno(vt->ios);
+ 
+-	while ((ret = ioctl(fd, VT_ACTIVATE, vt->nr)) == -1 && errno == EINTR);
+-	if (ret == -1)
+-		error(EXIT_FAILURE, errno, "%s: VT_ACTIVATE", CONSOLE_DEVICE);
+-	while ((ret = ioctl(fd, VT_WAITACTIVE, vt->nr)) == -1 && errno == EINTR);
+-	if (ret == -1)
+-		error(EXIT_FAILURE, errno, "%s: VT_WAITACTIVE", CONSOLE_DEVICE);
+-
+-	tcgetattr(vt->fd, &vt->term);
++	if (activate_vt(vt->nr) == -1)
++		error(EXIT_FAILURE, errno, "%s: activate lock VT", CONSOLE_DEVICE);
++
++	if (tcgetattr(vt->fd, &vt->term) < 0)
++		error(EXIT_FAILURE, errno, "read console input mode");
+ 	memcpy(&vt->term_orig, &vt->term, sizeof(vt->term_orig));
+ }
+ 
+@@ -115,16 +152,16 @@
+ CLEANUP int vt_release(vt_t *vt, int nr) {
+ 	int ret;
+ 
+-	while ((ret = ioctl(fd, VT_ACTIVATE, nr)) == -1 && errno == EINTR);
+-	if (ret == -1) {
+-		error(0, errno, "%s: VT_ACTIVATE", CONSOLE_DEVICE);
++	syslog(LOG_NOTICE, "Returning from tty%d to tty%d", vt->nr, nr);
++	if (activate_vt(nr) == -1) {
++		int saved_errno = errno;
++		syslog(LOG_ERR, "Could not return to tty%d: %s; VT switching remains unlocked",
++		       nr, strerror(saved_errno));
++		error(0, saved_errno, "%s: activate session VT", CONSOLE_DEVICE);
++		errno = saved_errno;
+ 		return -1;
+ 	}
+-	while ((ret = ioctl(fd, VT_WAITACTIVE, nr)) == -1 && errno == EINTR);
+-	if (ret == -1) {
+-		error(0, errno, "%s: VT_WAITACTIVE", CONSOLE_DEVICE);
+-		return -1;
+-	}
++	syslog(LOG_NOTICE, "Session tty%d is active", nr);
+ 
+ 	if (vt->ios != NULL) {
+ 		fclose(vt->ios);
+@@ -146,13 +183,16 @@
+ void vt_secure(vt_t *vt) {
+ 	vt->term.c_iflag &= ~IXON;
+ 	vt->term.c_lflag &= ~(ECHO | ISIG);
+-	tcsetattr(vt->fd, TCSANOW, &vt->term);
++	if (tcsetattr(vt->fd, TCSANOW, &vt->term) < 0)
++		error(EXIT_FAILURE, errno, "secure console input");
+ }
+ 
+ /* Blank only after VT switching has been locked. The wake key is consumed. */
+ void vt_blank_until_key(vt_t *vt) {
+ 	struct termios raw = vt->term;
+-	char vesa[2] = { TIOCL_SETVESABLANK, 3 };
++	/* Console blanking only: do not leave global VESA power-down enabled
++	 * across suspend and the handoff back to the DRM compositor. */
++	char vesa[2] = { TIOCL_SETVESABLANK, 0 };
+ 	char command = TIOCL_BLANKSCREEN;
+ 	unsigned char key;
+ 	ssize_t count;
+@@ -174,6 +214,7 @@
+ 
+ CLEANUP void vt_reset(vt_t *vt) {
+ 	fprintf(vt->ios, "\033[H\033[J"); /* clear the screen */
++	fflush(vt->ios);
+ 	tcsetattr(vt->fd, TCSANOW, &vt->term_orig);
+ }
+ 
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-version = 13+
++version = 13+rice-vt-recovery-20261105
+ 
+ srcdir = .
+ VPATH = $(srcdir)

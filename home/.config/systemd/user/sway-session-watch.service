@@ -1,0 +1,8 @@
+[Unit]
+Description=Stop Sway graphical session services when the compositor exits
+PartOf=sway-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/swaymsg -m -t subscribe '["shutdown"]'
+ExecStopPost=/usr/bin/systemctl --user --no-block stop sway-session.target

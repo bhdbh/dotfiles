@@ -1,0 +1,132 @@
+[icon]
+globs = []
+dirs = []
+files = []
+exts = []
+conds = [
+    { if = "dir", text = "󰉋", fg = "#fafafa" },
+]
+
+[mgr]
+cwd = { fg = "#fafafa", bold = true }
+find_keyword = { fg = "#fafafa", bold = true }
+find_position = { fg = "#a1a1aa" }
+symlink_target = { fg = "#a1a1aa" }
+
+marker_copied = { fg = "#d4d4d8" }
+marker_cut = { fg = "#71717a" }
+marker_marked = { fg = "#fafafa" }
+marker_selected = { fg = "#fafafa" }
+
+count_copied = { fg = "#18181b", bg = "#d4d4d8" }
+count_cut = { fg = "#fafafa", bg = "#3f3f46" }
+count_selected = { fg = "#18181b", bg = "#fafafa" }
+
+border_symbol = "│"
+border_style = { fg = "#52525b" }
+
+[indicator]
+padding = { open = "▐", close = "▌" }
+parent = { fg = "#71717a" }
+current = { fg = "#fafafa", bold = true }
+preview = { fg = "#71717a", underline = false }
+
+[tabs]
+sep_inner = { open = "▐", close = "▌" }
+sep_outer = { open = "▐", close = "▌" }
+active = { fg = "#18181b", bg = "#fafafa", bold = true }
+inactive = { fg = "#a1a1aa", bg = "#27272a" }
+
+[mode]
+normal_main = { fg = "#18181b", bg = "#fafafa", bold = true }
+normal_alt = { fg = "#fafafa", bg = "#3f3f46" }
+select_main = { fg = "#18181b", bg = "#d4d4d8", bold = true }
+select_alt = { fg = "#fafafa", bg = "#3f3f46" }
+unset_main = { fg = "#fafafa", bg = "#52525b" }
+unset_alt = { fg = "#a1a1aa", bg = "#27272a" }
+
+[status]
+sep_left = { open = "▐", close = "▌" }
+sep_right = { open = "▐", close = "▌" }
+overall = { fg = "#d4d4d8" }
+perm_type = { fg = "#a1a1aa" }
+perm_read = { fg = "#d4d4d8" }
+perm_write = { fg = "#a1a1aa" }
+perm_exec = { fg = "#fafafa" }
+perm_sep = { fg = "#71717a" }
+progress_label = { fg = "#fafafa" }
+progress_normal = { fg = "#d4d4d8" }
+progress_error = { fg = "#71717a" }
+
+[filetype]
+rules = [
+    { url = "*/", fg = "#d4d4d8" },
+    { url = "*", fg = "#fafafa" },
+]
+
+[which]
+border = { fg = "#52525b" }
+cand = { fg = "#fafafa" }
+rest = { fg = "#a1a1aa" }
+desc = { fg = "#71717a" }
+
+[confirm]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa", bold = true }
+body = { fg = "#d4d4d8" }
+list = { fg = "#fafafa" }
+btn_yes = { fg = "#18181b", bg = "#d4d4d8" }
+btn_no = { fg = "#fafafa", bg = "#3f3f46" }
+
+[notify]
+title_info = { fg = "#d4d4d8" }
+title_warn = { fg = "#a1a1aa" }
+title_error = { fg = "#fafafa" }
+
+[input]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa" }
+value = { fg = "#fafafa" }
+selected = { bg = "#3f3f46" }
+
+[cmp]
+border = { fg = "#52525b" }
+active = { fg = "#fafafa", bg = "#3f3f46" }
+inactive = { fg = "#a1a1aa" }
+
+[tasks]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa" }
+hovered = { fg = "#fafafa", bg = "#3f3f46" }
+
+[help]
+border = { fg = "#52525b" }
+chord = { fg = "#fafafa" }
+action = { fg = "#d4d4d8" }
+hovered = { fg = "#fafafa", bg = "#3f3f46" }
+
+[pick]
+border = { fg = "#52525b" }
+active = { fg = "#fafafa", bg = "#3f3f46" }
+inactive = { fg = "#a1a1aa" }
+
+[git]
+unknown = { fg = "#71717a" }
+ignored = { fg = "#52525b" }
+untracked = { fg = "#a1a1aa" }
+unstaged = { fg = "#d4d4d8" }
+staged = { fg = "#fafafa", bold = true }
+added = { fg = "#fafafa", bold = true }
+deleted = { fg = "#a1a1aa", underline = true }
+updated = { fg = "#d4d4d8" }
+clean = { fg = "#52525b" }
+
+unknown_sign = " "
+ignored_sign = " "
+untracked_sign = "?"
+unstaged_sign = "M"
+staged_sign = "S"
+added_sign = "A"
+deleted_sign = "D"
+updated_sign = "U"
+clean_sign = " "

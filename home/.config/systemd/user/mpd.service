@@ -1,0 +1,16 @@
+[Unit]
+Description=Music Player Daemon
+Documentation=man:mpd(1) man:mpd.conf(5)
+Wants=pipewire.service
+After=pipewire.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/mpd --systemd @HOME@/.config/mpd/mpd.conf
+RuntimeDirectory=mpd
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

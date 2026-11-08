@@ -1,0 +1,47 @@
+# name: Zinc
+# preferred_background: 18181b
+
+# Syntax
+fish_color_normal fafafa
+fish_color_command fafafa --bold
+fish_color_keyword d4d4d8 --bold
+fish_color_quote a1a1aa
+fish_color_redirection a1a1aa --bold
+fish_color_end fafafa --bold
+fish_color_error fafafa --bold --underline
+fish_color_param d4d4d8
+fish_color_option e4e4e7
+fish_color_comment 52525b
+fish_color_operator 71717a --bold
+fish_color_escape fafafa --bold
+fish_color_autosuggestion 52525b
+fish_color_valid_path d4d4d8 --underline
+fish_color_selection fafafa --background=3f3f46
+fish_color_search_match fafafa --background=3f3f46
+fish_color_cancel a1a1aa
+fish_color_history_current fafafa --bold
+
+# Pager
+fish_pager_color_prefix fafafa --bold
+fish_pager_color_completion d4d4d8
+fish_pager_color_description 71717a
+fish_pager_color_progress a1a1aa
+
+fish_pager_color_selected_background --background=3f3f46
+fish_pager_color_selected_completion fafafa --bold
+fish_pager_color_selected_description a1a1aa
+fish_pager_color_selected_prefix fafafa --bold
+
+fish_pager_color_secondary_completion a1a1aa
+fish_pager_color_secondary_description 52525b
+fish_pager_color_secondary_prefix d4d4d8
+
+# Command types
+fish_color_command fafafa --bold
+fish_color_function e4e4e7 --bold
+fish_color_builtin d4d4d8 --bold
+fish_color_keyword d4d4d8 --bold
+
+# Arguments
+fish_color_param d4d4d8
+fish_color_option e4e4e7

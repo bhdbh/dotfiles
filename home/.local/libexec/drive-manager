@@ -1,0 +1,201 @@
+#!/usr/bin/python3
+"""Automount USB filesystems and maintain owned links in ~/Drives."""
+
+import json
+import logging
+import os
+from pathlib import Path
+import signal
+
+SERVICE = "org.freedesktop.UDisks2"
+ROOT = "/org/freedesktop/UDisks2"
+BLOCK = SERVICE + ".Block"
+DRIVE = SERVICE + ".Drive"
+FILESYSTEM = SERVICE + ".Filesystem"
+
+
+def usb_drive(objects, block):
+    """Follow unlocked mappings back to their physical USB drive."""
+    visited = set()
+    while block:
+        drive = objects.get(block.get("Drive"), {}).get(DRIVE, {})
+        if drive.get("ConnectionBus") == "usb":
+            return drive
+        backing = block.get("CryptoBackingDevice", "/")
+        if backing == "/" or backing in visited:
+            return None
+        visited.add(backing)
+        block = objects.get(backing, {}).get(BLOCK, {})
+    return None
+
+
+def safe_name(value):
+    # Labels are single path components, even when a filesystem permits '/'.
+    return "".join("_" if c in "/\x00" or ord(c) < 32 else c for c in str(value)).strip().lstrip(".")[:180]
+
+
+def volumes(objects):
+    result = {}
+    for object_path, interfaces in objects.items():
+        block = interfaces.get(BLOCK, {})
+        filesystem = interfaces.get(FILESYSTEM)
+        drive = usb_drive(objects, block)
+        if filesystem is None or drive is None or block.get("HintIgnore", False):
+            continue
+        device = os.fsdecode(bytes(block.get("Device", [])).rstrip(b"\0"))
+        uuid = str(block.get("IdUUID", ""))
+        label = safe_name(block.get("IdLabel", "")) or safe_name(uuid) or safe_name(Path(device).name) or "USB"
+        mounts = [os.fsdecode(bytes(p).rstrip(b"\0")) for p in filesystem.get("MountPoints", [])]
+        mounts = [p for p in mounts if p.startswith("/") and p != "/" and os.path.isdir(p) and os.access(p, os.R_OK | os.X_OK)]
+        result[str(object_path)] = {
+            "label": label, "suffix": safe_name(uuid) or safe_name(Path(device).name) or "USB",
+            "mount": sorted(mounts)[0] if mounts else None,
+            "mounted": bool(filesystem.get("MountPoints", [])),
+            "auto": bool(block.get("HintAuto", True)) and not block.get("HintSystem", False)
+                and block.get("IdUsage") == "filesystem",
+            "identity": (device, uuid, int(drive.get("TimeMediaDetected", 0))),
+        }
+    return result
+
+
+class Links:
+    def __init__(self, root, state):
+        self.root, self.state = Path(root), Path(state)
+        try:
+            saved = json.loads(self.state.read_text())
+        except FileNotFoundError:
+            saved = {}
+        if not isinstance(saved, dict) or any(
+            not isinstance(n, str) or not n or n in (".", "..") or "/" in n
+            or not isinstance(t, str) or not t.startswith("/") for n, t in saved.items()
+        ):
+            raise ValueError("Invalid managed-link state")
+        self.saved = saved
+
+    def owns(self, name, target):
+        link = self.root / name
+        return link.is_symlink() and os.readlink(link) == target
+
+    def save(self, links):
+        if links == self.saved and self.state.exists():
+            return
+        self.state.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state.with_suffix(".tmp")
+        temporary.write_text(json.dumps(links, ensure_ascii=True, indent=2) + "\n")
+        os.replace(temporary, self.state)
+        self.saved = links.copy()
+
+    def sync(self, mounted):
+        if self.root.is_symlink():
+            raise ValueError(f"Refusing to manage symlink directory: {self.root}")
+        owned = {n: t for n, t in self.saved.items() if self.owns(n, t)}
+        taken = {p.name for p in self.root.iterdir()} - owned.keys() if self.root.exists() else set()
+        desired = {}
+        for volume in sorted(mounted, key=lambda v: (v["label"], v["suffix"], v["mount"])):
+            target, base = volume["mount"], volume["label"]
+            previous = next((n for n, t in owned.items() if t == target and (n == base or n.startswith(base + " ("))), None)
+            name = previous if previous and previous not in desired else base
+            if name in taken or name in desired:
+                name = f"{base} ({volume['suffix'][:40]})"
+                number = 2
+                while name in taken or name in desired:
+                    name = f"{base} ({volume['suffix'][:40]}-{number})"
+                    number += 1
+            desired[name] = target
+        for name, target in owned.items():
+            if desired.get(name) != target:
+                (self.root / name).unlink()
+                logging.info("Removed ~/Drives/%s", name)
+        if desired:
+            self.root.mkdir(exist_ok=True)
+        # Record ownership before creation so a restart can recover interrupted work.
+        self.save(desired)
+        for name, target in desired.items():
+            if not self.owns(name, target):
+                (self.root / name).symlink_to(target, target_is_directory=True)
+                logging.info("Linked ~/Drives/%s -> %s", name, target)
+        if not desired and self.root.exists():
+            try:
+                self.root.rmdir()
+                logging.info("Removed empty ~/Drives")
+            except OSError:
+                # Never delete user-created files or directories.
+                logging.warning("Keeping ~/Drives because it contains unmanaged entries")
+
+
+class Manager:
+    def __init__(self):
+        import dbus
+        from dbus.mainloop.glib import DBusGMainLoop
+        from gi.repository import GLib, GLibUnix
+
+        self.dbus, self.GLib, self.GLibUnix = dbus, GLib, GLibUnix
+        DBusGMainLoop(set_as_default=True)
+        self.bus = dbus.SystemBus()
+        self.loop = GLib.MainLoop()
+        self.pending = False
+        self.seen = {}
+        self.links = Links(Path.home() / "Drives", Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "drive-manager/links.json")
+        for interface, member in (("org.freedesktop.DBus.ObjectManager", "InterfacesAdded"),
+                                  ("org.freedesktop.DBus.ObjectManager", "InterfacesRemoved"),
+                                  ("org.freedesktop.DBus.Properties", "PropertiesChanged")):
+            self.bus.add_signal_receiver(self.schedule, signal_name=member, dbus_interface=interface, bus_name=SERVICE)
+        self.bus.add_signal_receiver(self.owner_changed, signal_name="NameOwnerChanged",
+                                     dbus_interface="org.freedesktop.DBus", arg0=SERVICE)
+        GLib.timeout_add_seconds(5, self.periodic)
+        self.schedule()
+
+    def owner_changed(self, name, old, new):
+        self.seen.clear()
+        self.schedule()
+
+    def schedule(self, *args):
+        if not self.pending:
+            self.pending = True
+            self.GLib.timeout_add(150, self.refresh)
+
+    def periodic(self):
+        self.schedule()
+        return True
+
+    def mounted(self, path, mountpoint):
+        logging.info("Mounted %s at %s", path, mountpoint)
+        self.schedule()
+
+    def failed(self, path, error):
+        logging.error("Cannot mount %s: %s", path, error)
+        self.schedule()
+
+    def refresh(self):
+        self.pending = False
+        try:
+            proxy = self.bus.get_object(SERVICE, ROOT)
+            objects = self.dbus.Interface(proxy, "org.freedesktop.DBus.ObjectManager").GetManagedObjects(timeout=10)
+            current = volumes(objects)
+            self.seen = {p: identity for p, identity in self.seen.items() if p in current}
+            for path, volume in current.items():
+                if not volume["auto"] and not volume["mounted"]:
+                    continue
+                if self.seen.get(path) == volume["identity"]:
+                    continue
+                # Once per attachment: a manual unmount must stay unmounted.
+                self.seen[path] = volume["identity"]
+                if volume["auto"] and not volume["mounted"]:
+                    filesystem = self.dbus.Interface(self.bus.get_object(SERVICE, path), FILESYSTEM)
+                    filesystem.Mount({"auth.no_user_interaction": self.dbus.Boolean(True)},
+                                     reply_handler=lambda mountpoint, p=path: self.mounted(p, mountpoint),
+                                     error_handler=lambda error, p=path: self.failed(p, error), timeout=60)
+            self.links.sync([v for v in current.values() if v["mount"]])
+        except Exception:
+            logging.exception("Failed to reconcile USB drives")
+        return False
+
+    def run(self):
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self.GLibUnix.signal_add(self.GLib.PRIORITY_DEFAULT, sig, self.loop.quit)
+        self.loop.run()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    Manager().run()

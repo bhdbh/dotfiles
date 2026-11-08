@@ -1,0 +1,27 @@
+{
+  "name": "yazi-file-actions",
+  "displayName": "Yazi File Actions",
+  "description": "Routes deletion to the Yazi desktop-dialog plugin and preserves native VS Code file actions.",
+  "version": "0.3.1",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "engines": { "vscode": "^1.100.0" },
+  "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "activationEvents": ["*"],
+  "capabilities": { "untrustedWorkspaces": { "supported": true } },
+  "contributes": {
+    "commands": [
+      { "command": "localYazi.manage", "title": "Manage Files in Yazi", "category": "Yazi" }
+    ],
+    "menus": {
+      "explorer/context": [
+        { "command": "localYazi.manage", "when": "resourceScheme == file", "group": "navigation@99" }
+      ]
+    },
+    "keybindings": [
+      { "command": "localYazi.manage", "key": "ctrl+alt+y" }
+    ]
+  }
+}

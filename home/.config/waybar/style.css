@@ -1,0 +1,232 @@
+/* Tailwind CSS zinc: 50 is the lightest tone, 900 the darkest. */
+@define-color zinc_50  #fafafa;
+@define-color zinc_100 #f4f4f5;
+@define-color zinc_200 #e4e4e7;
+@define-color zinc_300 #d4d4d8;
+@define-color zinc_400 #a1a1aa;
+@define-color zinc_500 #71717a;
+@define-color zinc_600 #52525b;
+@define-color zinc_700 #3f3f46;
+@define-color zinc_800 #27272a;
+@define-color zinc_900 #18181b;
+
+/* Tailwind CSS alert colors, matching the battery palette. */
+@define-color orange_500 #f97316;
+@define-color red_500 #ef4444;
+@define-color green_500 #22c55e;
+
+* {
+    font-family: "Red Hat Mono", monospace;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    transition: none;
+    animation: none;
+}
+
+window#waybar {
+    background: transparent;
+    color: @zinc_100;
+}
+
+/* The window only positions its elements; each element owns its frame. */
+window#waybar > box {
+    margin: 0;
+    padding: 0;
+}
+
+tooltip {
+    background: @zinc_800;
+    border: 3px solid @zinc_600;
+}
+
+tooltip label {
+    color: @zinc_200;
+    padding: 3px 6px;
+}
+
+/* Square 30px frames: 24px content + two 3px borders, shared between buttons. */
+#workspaces button {
+    min-width: 24px;
+    padding: 6px 0;
+    margin: 0;
+    color: @zinc_400;
+    background: @zinc_900;
+    border: 3px solid @zinc_600;
+    text-shadow: none;
+}
+
+#workspaces button:hover {
+    background: @zinc_700;
+    color: @zinc_100;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+#workspaces button.empty {
+    color: @zinc_500;
+}
+
+#workspaces button.urgent {
+    background: @zinc_300;
+    color: @zinc_900;
+    border-color: @zinc_600;
+}
+
+/* Keep the active colors while hovering, including empty workspaces. */
+#workspaces button.focused,
+#workspaces button.active,
+#workspaces button.focused:hover,
+#workspaces button.active:hover {
+    border-color: @zinc_600;
+    background: @zinc_50;
+    color: @zinc_900;
+}
+
+#workspaces button.focused,
+#workspaces button.active,
+#workspaces button.focused label,
+#workspaces button.active label {
+    font-weight: 700;
+}
+
+#clock,
+#network,
+#volume-status,
+#cpu-status,
+#memory,
+#battery-control,
+#tray {
+    padding: 6px;
+    margin: 0;
+    border: 3px solid @zinc_600;
+    background: @zinc_900;
+    color: @zinc_100;
+}
+
+/* Each element shares the preceding element's right border. */
+#workspaces button + button,
+#clock,
+#network,
+#volume-status,
+#cpu-status,
+#memory,
+#battery-control {
+    border-left-width: 0;
+}
+
+/* Compound elements keep their dividers inside the vertical padding. */
+#clock,
+#cpu-status {
+    padding: 6px 0;
+}
+
+#cpu,
+#temperature,
+#clock-date,
+#clock-time {
+    padding: 0 6px;
+}
+
+/* Dividers start with the visible text, inside the same 6px padding. */
+#item-divider {
+    min-width: 3px;
+    min-height: 12px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: @zinc_600;
+}
+
+#clock {
+    color: @zinc_50;
+}
+
+/* Both circles fill the 12px content height, centered inside the 6px padding. */
+#clock-recording,
+#battery-full {
+    min-width: 12px;
+    min-height: 12px;
+    border-radius: 50%;
+}
+
+/* Recording stays inside the clock, before time and date, with a 6px gap. */
+#clock-recording {
+    margin-left: 6px;
+    background: @red_500;
+}
+
+#clock-recording.dim {
+    background: @zinc_800;
+}
+
+#pulseaudio,
+#custom-audio-output,
+#battery-control,
+#cpu,
+#temperature,
+#memory {
+    color: @zinc_100;
+}
+
+#network.disconnected,
+#custom-audio-output.unavailable {
+    color: @zinc_500;
+}
+
+#temperature.warning {
+    color: @orange_500;
+}
+
+#temperature.critical {
+    color: @red_500;
+}
+
+/* Each .metric box contains distinct label and value widgets. */
+.metric-label,
+.metric-value {
+    margin: 0;
+    padding: 0;
+}
+
+/* Shared label/value gap: Wi-Fi, CPU, RAM, volume and battery. */
+.metric > .metric-label + .metric-value {
+    margin-left: 6px;
+}
+
+.muted #volume-value {
+    color: @zinc_500;
+}
+
+/* Passive frames; each action owns its inner section and padding. */
+#battery-control,
+#volume-status {
+    padding: 0;
+}
+
+#battery-info,
+#battery-charge-content,
+#pulseaudio,
+#audio-output-content {
+    padding: 6px;
+}
+
+#battery-charge-divider,
+#audio-output-divider {
+    padding: 6px 0;
+}
+
+#battery-full {
+    background: @zinc_800;
+}
+
+#battery-full.enabled {
+    background: @green_500;
+}

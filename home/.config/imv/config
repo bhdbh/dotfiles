@@ -1,0 +1,5 @@
+[options]
+# imv uses OpenGL for rendering; the Wayland backend is selected by its launcher.
+background = 18181b
+scaling_mode = shrink
+suppress_default_binds = false

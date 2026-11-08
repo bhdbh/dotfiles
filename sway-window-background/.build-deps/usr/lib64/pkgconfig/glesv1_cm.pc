@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${pcfiledir}/../../lib64
+includedir=${pcfiledir}/../../include
+
+Name: glesv1_cm
+Description: OpenGL ES-CM v1 library and headers
+Version: 1.0
+Libs: -L${libdir} -lGLESv1_CM
+Cflags: -I${includedir}

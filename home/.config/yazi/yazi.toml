@@ -1,0 +1,57 @@
+[opener]
+edit = [
+    { run = "/usr/bin/code --reuse-window %s", orphan = true, desc = "VS Code", for = "unix" },
+]
+bulk_rename = [
+    { run = "/usr/bin/code --reuse-window --wait %s", block = true, desc = "Edit names in VS Code", for = "unix" },
+]
+image = [
+    { run = "/usr/bin/imv %s", orphan = true, desc = "imv", for = "unix" },
+]
+video = [
+    { run = "/usr/bin/mpv %s", orphan = true, desc = "mpv", for = "unix" },
+]
+music = [
+    { run = "@HOME@/.local/libexec/mpd-open %s", orphan = true, desc = "ncmpcpp + MPD", for = "unix" },
+]
+
+[open]
+prepend_rules = [
+    { url = "bulk-rename.txt", use = "bulk_rename" },
+    { mime = "text/*", use = "edit" },
+    { mime = "application/{json,json5,x-ndjson,xml,yaml,toml,javascript,x-shellscript,x-perl,x-ruby,x-php}", use = "edit" },
+    { mime = "application/*+json", use = "edit" },
+    { mime = "application/*+xml", use = "edit" },
+    { mime = "image/*", use = "image" },
+    { mime = "video/*", use = "video" },
+    { mime = "audio/*", use = "music" },
+    { mime = "application/ogg", use = "music" },
+]
+
+[mgr]
+sort_by = "natural"
+sort_sensitive = false
+sort_dir_first = true
+sort_reverse = false
+linemode = "size"
+show_hidden = true
+show_symlink = true
+scrolloff = 5
+
+[preview]
+wrap = "yes"
+tab_size = 4
+image_filter = "lanczos3"
+image_quality = 80
+image_delay = 50
+
+[[plugin.prepend_fetchers]]
+url = "*"
+run = "git"
+group = "git"
+
+[[plugin.prepend_fetchers]]
+url = "*/"
+run = "git"
+group = "git"
+

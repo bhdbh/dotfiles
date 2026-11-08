@@ -1,0 +1,29 @@
+[Unit]
+Description=CPU power savings for the Power Profiles placeholder driver
+Requires=power-profiles-daemon.service
+After=power-profiles-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/waybar-cpu-power
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=waybar-cpu-power
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ReadWritePaths=/sys/devices/system/cpu/cpufreq
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

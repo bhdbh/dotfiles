@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${pcfiledir}/../..
+libdir=${pcfiledir}/../../lib64
+includedir=${pcfiledir}/../../include
+
+Name: XCB RenderUtil library
+Description: XCB RENDER-extension utilities library
+Version: 0.3.10
+Requires: xcb xcb-render
+Libs: -L${libdir} -lxcb-render-util 
+Cflags: -I${includedir}

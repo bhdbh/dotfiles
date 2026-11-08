@@ -1,0 +1,29 @@
+diff --git a/sway/input/seat.c b/sway/input/seat.c
+index 1b63f62..6cac32b 100644
+--- a/sway/input/seat.c
++++ b/sway/input/seat.c
+@@ -967,6 +967,24 @@ void seat_remove_device(struct sway_seat *seat,
+ 
+ 	seat_device_destroy(seat_device);
+ 
++	// Removing the active keyboard clears the seat's keyboard even when other
++	// configured keyboards remain. Select a replacement now so new clients get
++	// its keymap before focus and modifiers, without waiting for another key.
++	if (!wlr_seat_get_keyboard(seat->wlr_seat)) {
++		struct sway_seat_device *candidate;
++		wl_list_for_each(candidate, &seat->devices, link) {
++			if (!candidate->keyboard || !candidate->keyboard->wlr->keymap) {
++				continue;
++			}
++			struct wlr_keyboard *keyboard = candidate->keyboard->wlr;
++			if (keyboard->group) {
++				keyboard = &keyboard->group->keyboard;
++			}
++			wlr_seat_set_keyboard(seat->wlr_seat, keyboard);
++			break;
++		}
++	}
++
+ 	seat_update_capabilities(seat);
+ }
+ 

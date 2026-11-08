@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${pcfiledir}/../..
+libdir=${pcfiledir}/../../lib64
+includedir=${pcfiledir}/../../include
+
+Name: XCB ICCCM library
+Description: XCB ICCCM binding
+Version: 0.4.2
+Requires: xcb
+Libs: -L${libdir} -lxcb-icccm 
+Cflags: -I${includedir}

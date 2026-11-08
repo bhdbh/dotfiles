@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Yazi
+GenericName=File Manager
+GenericName[pt_BR]=Gerenciador de arquivos
+Comment=Browse files and folders in Foot
+Comment[pt_BR]=Explore arquivos e pastas no Foot
+Icon=system-file-manager
+TryExec=@HOME@/.cargo/bin/yazi
+Exec=/usr/bin/foot --app-id=yazi --title=Yazi @HOME@/.cargo/bin/yazi %f
+Path=@HOME@
+Terminal=false
+MimeType=inode/directory;
+Categories=System;FileManager;FileTools;
+Keywords=File;Manager;Explorer;Browser;Files;Folders;
+Keywords[pt_BR]=Arquivo;Arquivos;Pasta;Pastas;Gerenciador;Explorador;

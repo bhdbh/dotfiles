@@ -1,0 +1,252 @@
+#!/usr/bin/python3
+"""Keep numbered workspaces on the primary output and other outputs fixed."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import select as io_select
+import signal
+import subprocess
+import sys
+
+
+PREFIX = "__secondary_"
+BAR_PROCESS = None
+
+
+def query(kind):
+    return json.loads(subprocess.check_output(
+        ["swaymsg", "-r", "-t", kind], text=True))
+
+
+def command(commands):
+    if not commands:
+        return
+    result = json.loads(subprocess.check_output(
+        ["swaymsg", "-r", "; ".join(commands)], text=True))
+    if not all(item.get("success") for item in result):
+        raise RuntimeError(result)
+
+
+def quote(value):
+    return json.dumps(value)
+
+
+def select(name):
+    return "workspace --no-auto-back-and-forth " + quote(name)
+
+
+def session_bars():
+    result = []
+    pids = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "waybar"],
+                          capture_output=True, text=True)
+    for pid in pids.stdout.split():
+        try:
+            environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            current_session = b"SWAYSOCK=" + os.environ["SWAYSOCK"].encode()
+            if current_session in environment:
+                result.append(int(pid))
+        except (ProcessLookupError, FileNotFoundError, PermissionError):
+            pass
+    return result
+
+
+def ensure_bar(path, restart=False):
+    global BAR_PROCESS
+    if BAR_PROCESS is not None:
+        running = BAR_PROCESS.poll() is None
+        if running and not restart:
+            return
+    pids = session_bars()
+    if pids and not restart:
+        return
+    # Waybar 0.15 ignores SIGUSR2 when removing an output has removed its last
+    # bar. Restart the process after updating the selector, even in that state.
+    for pid in pids:
+        try:
+            descriptor = os.pidfd_open(pid)
+        except ProcessLookupError:
+            continue
+        try:
+            signal.pidfd_send_signal(descriptor, signal.SIGINT)
+            if not io_select.select([descriptor], [], [], 2)[0]:
+                signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                if not io_select.select([descriptor], [], [], 2)[0]:
+                    raise RuntimeError(f"Waybar {pid} did not stop")
+        except ProcessLookupError:
+            pass
+        finally:
+            os.close(descriptor)
+    if BAR_PROCESS is not None:
+        BAR_PROCESS.poll()
+    BAR_PROCESS = subprocess.Popen(["waybar", "--config", str(path)],
+                                   stdin=subprocess.DEVNULL)
+
+
+def update_bar(path, primary):
+    text = path.read_text()
+    pattern = r'(?m)^(\s*"output"\s*:\s*)("(?:\\.|[^"\\])*"|\[[^\]]*\])'
+    match = re.search(pattern, text)
+    if not match:
+        raise RuntimeError("Waybar configuration has no output selector")
+    changed = json.loads(match.group(2)) != primary
+    if changed:
+        updated = text[:match.start(2)] + quote(primary) + text[match.end(2):]
+        temporary = path.with_name(path.name + ".primary-workspaces.tmp")
+        temporary.write_text(updated)
+        temporary.chmod(path.stat().st_mode & 0o777)
+        temporary.replace(path)
+    ensure_bar(path, restart=changed)
+
+
+def routing_signature(primary, outputs, workspaces):
+    # Window creation, focus and dragging do not change output assignments.
+    # Cache only the policy inputs; always check actual workspace placement.
+    extra_names = sorted(ws["name"] for ws in workspaces
+                         if not ws["name"].isdigit() and not ws["name"].startswith(PREFIX))
+    return primary, tuple(outputs), tuple(extra_names)
+
+
+def reconcile(options, state=None):
+    outputs = [item["name"] for item in query("get_outputs")
+               if item.get("active") and not item.get("non_desktop")]
+    if not outputs:
+        return
+    priority = [options.preferred_output]
+    priority += [name for name in outputs if name != options.laptop_output]
+    priority += [options.laptop_output] + outputs
+    primary = next(name for name in priority if name in outputs)
+    secondary = {name: PREFIX + name for name in outputs if name != primary}
+    fixed_names = set(secondary.values())
+    workspaces = query("get_workspaces")
+    signature = routing_signature(primary, outputs, workspaces)
+    settled = (
+        all(ws["output"] == (ws["name"][len(PREFIX):]
+                             if ws["name"] in fixed_names else primary)
+            and (not ws["name"].startswith(PREFIX) or ws["name"] in fixed_names)
+            for ws in workspaces)
+        and all(any(ws["name"] == name and ws["output"] == output and ws["visible"]
+                    for ws in workspaces) for output, name in secondary.items())
+    )
+    if state is not None and state.get("routing") == signature and settled:
+        update_bar(options.bar_config, primary)
+        return
+    focused = next((ws["id"] for ws in workspaces if ws.get("focused")), None)
+    main_visible = next((ws["id"] for ws in workspaces
+                         if ws["output"] == primary and ws["visible"]), None)
+    changed = False
+
+    # A fixed display becomes an ordinary numbered workspace when it is primary
+    # or disconnected. Its windows remain accessible on the remaining display.
+    numbers = {ws["num"] for ws in workspaces if ws["num"] >= 0}
+    for ws in workspaces:
+        if ws["name"].startswith(PREFIX) and ws["name"] not in fixed_names:
+            number = next(n for n in range(1, len(numbers) + 12) if n not in numbers)
+            command(["rename workspace " + quote(ws["name"]) + " to " + quote(str(number))])
+            numbers.add(number)
+            changed = True
+
+    # Reuse the currently visible secondary workspace so its windows stay put.
+    for output, name in secondary.items():
+        workspaces = query("get_workspaces")
+        if not any(ws["name"] == name for ws in workspaces):
+            visible = next((ws for ws in workspaces
+                            if ws["output"] == output and ws["visible"]), None)
+            if visible:
+                command(["rename workspace " + quote(visible["name"]) + " to " + quote(name)])
+            else:
+                command(["workspace " + quote(name) + " output " + quote(output), select(name)])
+            changed = True
+
+    workspaces = query("get_workspaces")
+    main_priority = list(dict.fromkeys([options.preferred_output, primary,
+                                       options.laptop_output] + outputs))
+    assignments = ["workspace " + quote(str(n)) + " output " +
+                   " ".join(quote(output) for output in main_priority)
+                   for n in range(1, 11)]
+    assignments += ["workspace " + quote(name) + " output " + quote(output)
+                    for output, name in secondary.items()]
+    for ws in workspaces:
+        if ws["name"] not in fixed_names and not ws["name"].isdigit():
+            assignments.append("workspace " + quote(ws["name"]) + " output " + quote(primary))
+    command(assignments)
+
+    for ws in workspaces:
+        destination = (ws["name"][len(PREFIX):]
+                       if ws["name"] in fixed_names else primary)
+        if ws["output"] != destination:
+            command([select(ws["name"]), "move workspace to output " + quote(destination)])
+            changed = True
+
+    # Moving another workspace away must leave the fixed area visible.
+    workspaces = query("get_workspaces")
+    for output, name in secondary.items():
+        if not any(ws["name"] == name and ws["visible"] for ws in workspaces):
+            command([select(name)])
+            changed = True
+    if changed and main_visible is not None:
+        previous = next((ws for ws in query("get_workspaces")
+                         if ws["id"] == main_visible and ws["output"] == primary
+                         and ws["name"] not in fixed_names), None)
+        if previous:
+            command([select(previous["name"])])
+    if changed and focused is not None:
+        previous = next((ws for ws in query("get_workspaces") if ws["id"] == focused), None)
+        if previous:
+            command([select(previous["name"])])
+    update_bar(options.bar_config, primary)
+    if state is not None:
+        state["routing"] = routing_signature(primary, outputs, query("get_workspaces"))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--preferred-output", default="HDMI-A-1")
+    parser.add_argument("--laptop-output", default="eDP-1")
+    parser.add_argument("--bar-config", type=Path,
+                        default=Path.home() / ".config/waybar/config.jsonc")
+    parser.add_argument("--once", action="store_true")
+    options = parser.parse_args()
+    if options.once:
+        reconcile(options)
+        return
+    identity = hashlib.sha256(os.environ["SWAYSOCK"].encode()).hexdigest()[:12]
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+    with (runtime / ("sway-primary-workspaces-" + identity + ".lock")).open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        # Run cleanup on session reloads and normal service termination too.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        listener = subprocess.Popen(
+            ["swaymsg", "-r", "-m", "-t", "subscribe", '["output","workspace","shutdown"]'],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            state = {}
+            def refresh():
+                try:
+                    reconcile(options, state)
+                except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                    state.clear()
+                    print("sway-primary-workspaces:", error, file=sys.stderr, flush=True)
+
+            refresh()
+            for line in listener.stdout:
+                event = json.loads(line)
+                if event.get("change") == "exit":
+                    break
+                if event.get("change") in ("init", "move", "rename", "reload", "unspecified"):
+                    if event.get("change") == "reload":
+                        state.clear()
+                    refresh()
+        finally:
+            listener.terminate()
+            listener.wait()
+
+
+if __name__ == "__main__":
+    main()

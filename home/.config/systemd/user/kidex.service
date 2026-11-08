@@ -1,0 +1,14 @@
+[Unit]
+Description=Kidex File Indexer
+Documentation=https://github.com/Kirottu/kidex
+Wants=drive-manager.service
+After=drive-manager.service
+
+[Service]
+Type=simple
+ExecStart=@HOME@/.cargo/bin/kidex
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

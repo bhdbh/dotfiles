@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+export XDG_CURRENT_DESKTOP=sway
+export GTK_USE_PORTAL=1
+export GDK_DEBUG=portals
+export QT_QPA_PLATFORMTHEME=xdgdesktopportal
+
+dbus-update-activation-environment --systemd \
+    WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP SWAYSOCK \
+    GTK_USE_PORTAL GDK_DEBUG QT_QPA_PLATFORMTHEME
+systemctl --user start sway-session.target
+systemctl --user start xdg-desktop-portal.service anyrun.service

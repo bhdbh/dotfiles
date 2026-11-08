@@ -1,0 +1,28 @@
+[Unit]
+Description=Preserve the selected Acer battery charge limit
+After=systemd-modules-load.service dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/waybar-acer-charge --watch
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=waybar-acer-charge
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ReadWritePaths=/etc/modprobe.d /run/waybar-acer-charge /sys/bus/wmi/drivers/acer-wmi-battery
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

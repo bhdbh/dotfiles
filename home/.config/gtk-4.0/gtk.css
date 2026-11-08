@@ -1,0 +1,10 @@
+/* Square window corners */
+window, window.background, decoration, .titlebar, headerbar {
+    border-radius: 0;
+}
+/* Flat style: no widget, text or icon shadows, including hover and backdrop. */
+* {
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}

@@ -1,0 +1,265 @@
+#!/usr/bin/python3
+"""Toggle wf-recorder on the output under the pointer, with sink-monitor audio."""
+
+from datetime import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+
+BUNDLE = Path.home() / '.local/lib/sway-screen-recording'
+SELF = str(Path(__file__).resolve())
+
+
+def executable(name):
+    installed = shutil.which(name)
+    bundled = BUNDLE / 'usr/bin' / name
+    if installed:
+        return installed
+    if bundled.is_file():
+        return str(bundled)
+    raise RuntimeError(f'Programa não encontrado: {name}')
+
+
+def command(*args):
+    return subprocess.check_output(args, text=True, timeout=5).strip()
+
+
+def notify(title, body, urgency='normal'):
+    try:
+        subprocess.run(['notify-send', '--app-name=Gravação de tela',
+                        '--hint=string:x-canonical-private-synchronous:sway-recording',
+                        '--urgency=' + urgency, title, body],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def runtime():
+    identity = hashlib.sha256(os.environ['SWAYSOCK'].encode()).hexdigest()[:12]
+    path = Path(os.environ['XDG_RUNTIME_DIR']) / ('sway-recording-' + identity)
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def start_time(pid):
+    # /proc/stat field 22, after the parenthesized command name.
+    return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+
+
+def active_state(path):
+    try:
+        state = json.loads((path / 'state.json').read_text())
+        if start_time(int(state['pid'])) == state['start_time']:
+            return state
+    except (OSError, ValueError, KeyError, IndexError):
+        pass
+    return None
+
+
+def write_state(path, state):
+    temporary = path / 'state.tmp'
+    temporary.write_text(json.dumps(state, ensure_ascii=False) + '\n')
+    temporary.replace(path / 'state.json')
+
+
+def pointer_output():
+    # Transparent, non-keyboard-interactive layer surfaces receive pointer-enter
+    # even over a panel or a window on an output which doesn't have keyboard focus.
+    # They disappear immediately; no click or selection is required.
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('GtkLayerShell', '0.1')
+    from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
+    import cairo
+
+    outputs = json.loads(command('swaymsg', '-r', '-t', 'get_outputs'))
+    outputs = [o for o in outputs if o['active'] and o.get('power', True)]
+    display = Gdk.Display.get_default()
+    if display is None or not GtkLayerShell.is_supported():
+        raise RuntimeError('Não foi possível consultar o ponteiro no Sway.')
+    windows = []
+    selected = []
+
+    def entered(window, event, output):
+        if not selected:
+            selected.append(output)
+            Gtk.main_quit()
+        return False
+
+    def transparent(window, context):
+        context.set_operator(cairo.OPERATOR_SOURCE)
+        context.set_source_rgba(0, 0, 0, 0)
+        context.paint()
+        return True
+
+    for index in range(display.get_n_monitors()):
+        monitor = display.get_monitor(index)
+        geometry = monitor.get_geometry()
+        output = next((o for o in outputs if
+                       (o['rect']['x'], o['rect']['y'],
+                        o['rect']['width'], o['rect']['height']) ==
+                       (geometry.x, geometry.y, geometry.width, geometry.height)), None)
+        if output is None:
+            continue
+        window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        window.set_app_paintable(True)
+        window.set_decorated(False)
+        window.set_accept_focus(False)
+        window.set_visual(window.get_screen().get_rgba_visual())
+        GtkLayerShell.init_for_window(window)
+        GtkLayerShell.set_namespace(window, 'sway-recording-pointer')
+        GtkLayerShell.set_layer(window, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_monitor(window, monitor)
+        GtkLayerShell.set_keyboard_mode(window, GtkLayerShell.KeyboardMode.NONE)
+        GtkLayerShell.set_exclusive_zone(window, -1)
+        for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                     GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(window, edge, True)
+        window.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK)
+        window.connect('draw', transparent)
+        window.connect('enter-notify-event', entered, output['name'])
+        window.show_all()
+        windows.append(window)
+    if not windows:
+        raise RuntimeError('Nenhum monitor ativo foi identificado.')
+
+    timer = GLib.timeout_add(2000, lambda: (Gtk.main_quit(), False)[1])
+    try:
+        Gtk.main()
+    finally:
+        if selected:
+            GLib.source_remove(timer)
+        for window in windows:
+            window.destroy()
+        display.flush()
+    if not selected:
+        raise RuntimeError('Não foi possível identificar o monitor sob o mouse.')
+    return selected[0]
+
+
+def audio_monitor():
+    pactl = executable('pactl')
+    sink_name = command(pactl, 'get-default-sink')
+    sinks = json.loads(command(pactl, '--format=json', 'list', 'sinks'))
+    sink = next((s for s in sinks if s['name'] == sink_name), None)
+    if sink is None:
+        raise RuntimeError('A saída de áudio padrão não está disponível.')
+    sources = json.loads(command(pactl, '--format=json', 'list', 'sources'))
+    monitor = next((s for s in sources if s['name'] == sink['monitor_source']), None)
+    if monitor is None or monitor.get('monitor_source') != sink['name']:
+        raise RuntimeError('A saída padrão não possui um monitor de áudio válido.')
+    # Never fall back to the default recording source (which may be a microphone).
+    return monitor['name']
+
+
+def run_recording(path):
+    with (path / 'record.lock').open('a') as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        output = pointer_output()
+        source = audio_monitor()
+        directory = Path(os.environ.get('SWAY_RECORDING_DIR',
+                                        str(Path.home() / 'Videos/Recordings')))
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone().strftime('%Y-%m-%d_%H-%M-%S_%f')
+        filename = directory / f'{stamp}_{output}.mp4'
+        args = [executable('wf-recorder'), '--output=' + output,
+                '--audio-backend=pulse', '--audio=' + source,
+                '--codec=libx264', '--codec-param=preset=ultrafast',
+                '--codec-param=crf=22', '--pixel-format=yuv420p',
+                '--framerate=60', '--audio-codec=aac', '--file=' + str(filename)]
+        child = None
+        state = None
+        try:
+            with (path / 'recorder.log').open('w') as log:
+                child = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                         stdout=log, stderr=subprocess.STDOUT)
+                signal.signal(signal.SIGTERM, lambda *unused: child.send_signal(signal.SIGINT)
+                              if child.poll() is None else None)
+                state = {'pid': child.pid, 'start_time': start_time(child.pid),
+                         'output': output, 'audio_source': source,
+                         'file': str(filename), 'stopping': False}
+                write_state(path, state)
+                time.sleep(0.5)
+                if child.poll() is None:
+                    notify('Gravação iniciada',
+                           f'Monitor: {output}\nSom do sistema, sem microfone.\n'
+                           'Super + Ctrl + S para parar.')
+                result = child.wait()
+            if result != 0 or not filename.exists() or filename.stat().st_size == 0:
+                raise RuntimeError('O gravador falhou. Consulte ' + str(path / 'recorder.log'))
+            notify('Gravação salva', str(filename))
+        finally:
+            if child is not None and child.poll() is None:
+                child.send_signal(signal.SIGINT)
+                child.wait()
+            current = active_state(path)
+            if current is None or (state and current['pid'] == state['pid']):
+                (path / 'state.json').unlink(missing_ok=True)
+
+
+def toggle(path):
+    with (path / 'toggle.lock').open('a') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        state = active_state(path)
+        if state:
+            if not state['stopping']:
+                # A pidfd plus the process start time prevents signaling a reused PID.
+                descriptor = os.pidfd_open(state['pid'])
+                try:
+                    if start_time(state['pid']) == state['start_time']:
+                        state['stopping'] = True
+                        write_state(path, state)
+                        signal.pidfd_send_signal(descriptor, signal.SIGINT)
+                finally:
+                    os.close(descriptor)
+            return
+        (path / 'state.json').unlink(missing_ok=True)
+        with (path / 'manager.log').open('w') as log:
+            worker = subprocess.Popen([sys.executable, SELF, '--run'],
+                                      stdin=subprocess.DEVNULL, stdout=log,
+                                      stderr=subprocess.STDOUT, start_new_session=True)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if active_state(path) or worker.poll() is not None:
+                return
+            time.sleep(0.05)
+        raise RuntimeError('O gravador demorou a iniciar. Consulte ' + str(path / 'manager.log'))
+
+
+def main():
+    try:
+        path = runtime()
+        option = sys.argv[1] if len(sys.argv) > 1 else '--toggle'
+        if option == '--run':
+            run_recording(path)
+        elif option == '--status':
+            print(json.dumps(active_state(path), ensure_ascii=False))
+        elif option == '--probe':
+            print(json.dumps({'output': pointer_output(),
+                              'audio_source': audio_monitor()}, ensure_ascii=False))
+        elif option == '--toggle':
+            toggle(path)
+        else:
+            raise RuntimeError('Opção inválida: ' + option)
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        print('sway-screen-recording:', error, file=sys.stderr)
+        notify('Erro na gravação', str(error), 'critical')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+includedir=${pcfiledir}/../../include
+datarootdir=${prefix}/share
+datadir=/usr/share
+
+Name: libglvnd
+Description: Vendor-neutral OpenGL dispatch library vendor interface
+Version: 1.7.0
+Libs:
+Cflags: -I${includedir}

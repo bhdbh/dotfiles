@@ -1,0 +1,6 @@
+[Unit]
+Description=Sway graphical session
+Documentation=man:systemd.special(7)
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target sway-session-watch.service
+After=graphical-session-pre.target

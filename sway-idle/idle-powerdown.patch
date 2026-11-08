@@ -1,0 +1,320 @@
+--- a/source/vt.c
++++ b/source/vt.c
+@@ -196,19 +196,28 @@
+ /* Blank only after VT switching has been locked. The wake key is consumed. */
+ void vt_blank_until_key(vt_t *vt) {
+ 	struct termios raw = vt->term;
+-	/* Console blanking only: do not leave global VESA power-down enabled
+-	 * across suspend and the handoff back to the DRM compositor. */
+-	char vesa[2] = { TIOCL_SETVESABLANK, 0 };
++	/* Request monitor power-down, then immediately reset the global mode.
++	 * The current blank keeps its power state until explicitly unblanked;
++	 * suspend and the handoff back to Sway must not inherit power-down. */
++	char vesa[2] = { TIOCL_SETVESABLANK, 3 };
+ 	char command = TIOCL_BLANKSCREEN;
+ 	unsigned char key;
+ 	ssize_t count;
++	int blanked;
+ 	raw.c_lflag &= ~ICANON;
+ 	raw.c_cc[VMIN] = 1;
+ 	raw.c_cc[VTIME] = 0;
+ 	fflush(vt->ios);
+ 	tcsetattr(vt->fd, TCSANOW, &raw);
+-	ioctl(vt->fd, TIOCLINUX, vesa);
+-	if (ioctl(vt->fd, TIOCLINUX, &command) == 0) {
++	if (ioctl(vt->fd, TIOCLINUX, vesa) < 0)
++		syslog(LOG_WARNING, "Could not select monitor power-down: %s", strerror(errno));
++	blanked = ioctl(vt->fd, TIOCLINUX, &command);
++	if (blanked < 0)
++		syslog(LOG_WARNING, "Could not power down the console: %s", strerror(errno));
++	vesa[1] = 0;
++	if (ioctl(vt->fd, TIOCLINUX, vesa) < 0)
++		syslog(LOG_WARNING, "Could not reset console power-down mode: %s", strerror(errno));
++	if (blanked == 0) {
+ 		do {
+ 			count = read(vt->fd, &key, 1);
+ 		} while (count < 0 && errno == EINTR);
+--- a/source/Makefile
++++ b/source/Makefile
+@@ -1,4 +1,4 @@
+-version = 13+rice-silent-unlock-20261106
++version = 13+rice-idle-powerdown-20261106
+ 
+ srcdir = .
+ VPATH = $(srcdir)
+--- a/tests/vt-transition.c
++++ b/tests/vt-transition.c
+@@ -8,29 +8,40 @@
+ #include <syslog.h>
+ #include <pty.h>
+ #include <poll.h>
++#include <unistd.h>
+ 
+ static int fake_ioctl(int, unsigned long, ...);
+ static int fake_clock(clockid_t, struct timespec *);
+ static int fake_sleep(const struct timespec *, struct timespec *);
+ static void fake_syslog(int, const char *, ...);
+ static FILE *fake_fopen(const char *, const char *);
++static ssize_t fake_read(int, void *, size_t);
+ #define ioctl fake_ioctl
+ #define clock_gettime fake_clock
+ #define nanosleep fake_sleep
+ #define syslog fake_syslog
+ #define fopen fake_fopen
++#define read fake_read
+ #include "../source/vt.c"
+ #undef ioctl
+ #undef clock_gettime
+ #undef nanosleep
+ #undef syslog
+ #undef fopen
++#undef read
+ 
+ static long long elapsed;
+ static int active, activate_calls, disallocate_calls, required_attempts;
+ static int state_interrupts, activation_error, vesa_mode, blank_calls, wake_calls;
++static int blank_error, powerdown_error, powerdown_calls, reset_calls;
++static int blank_power_mode;
+ static int acquire_master = -1, cleared_before_activate, error_calls;
+ static const char *acquire_path;
++
++static ssize_t fake_read(int terminal, void *buffer, size_t size) {
++    assert(vesa_mode == 0 && reset_calls == 1);
++    return read(terminal, buffer, size);
++}
+ 
+ static void read_until(int terminal, char *output, size_t size, const char *marker) {
+     size_t used = 0;
+@@ -110,9 +121,31 @@
+         break;
+     case TIOCLINUX: {
+         unsigned char *command = va_arg(args, unsigned char *);
+-        if (command[0] == TIOCL_SETVESABLANK) vesa_mode = command[1];
+-        else if (command[0] == TIOCL_BLANKSCREEN) blank_calls++;
+-        else if (command[0] == TIOCL_UNBLANKSCREEN) wake_calls++;
++        if (command[0] == TIOCL_SETVESABLANK) {
++            if (command[1] == 3) {
++                powerdown_calls++;
++                if (powerdown_error) {
++                    errno = powerdown_error;
++                    va_end(args);
++                    return -1;
++                }
++            } else {
++                assert(command[1] == 0);
++                reset_calls++;
++            }
++            vesa_mode = command[1];
++        } else if (command[0] == TIOCL_BLANKSCREEN) {
++            blank_calls++;
++            blank_power_mode = vesa_mode;
++            if (blank_error) {
++                errno = blank_error;
++                va_end(args);
++                return -1;
++            }
++        } else if (command[0] == TIOCL_UNBLANKSCREEN) {
++            assert(vesa_mode == 0 && reset_calls == 1);
++            wake_calls++;
++        }
+         else assert(!"Unexpected console blanking command");
+         break;
+     }
+@@ -143,6 +176,10 @@
+     acquire_master = -1;
+     acquire_path = NULL;
+     cleared_before_activate = error_calls = 0;
++    vesa_mode = 0;
++    blank_error = powerdown_error = powerdown_calls = reset_calls = 0;
++    blank_calls = wake_calls = 0;
++    blank_power_mode = -1;
+     fd = 42;
+ }
+ 
+@@ -186,20 +223,48 @@
+     active = 1;
+     assert(activate_vt(1) == 0 && activate_calls == 0);
+ 
+-    /* Verify the wake key is consumed and the terminal mode is restored,
+-     * without enabling the global VESA power-down mode. */
++    /* Power-down applies to this blank only; the global mode is reset before
++     * waiting for a wake key, authentication, suspend or a VT handoff. */
++    reset();
+     assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
+     console = (vt_t){ .fd = slave, .ios = fdopen(slave, "r+") };
+     assert(console.ios && tcgetattr(slave, &console.term) == 0);
+     console.term.c_lflag &= ~ECHO;
+     assert(tcsetattr(slave, TCSANOW, &console.term) == 0);
+-    vesa_mode = -1;
+     assert(write(master, "x", 1) == 1);
+     vt_blank_until_key(&console);
+     assert(vesa_mode == 0 && blank_calls == 1 && wake_calls == 1);
++    assert(blank_power_mode == 3 && powerdown_calls == 1 && reset_calls == 1);
+     assert(tcgetattr(slave, &restored) == 0);
+     assert(restored.c_lflag == console.term.c_lflag);
+     assert(restored.c_cc[VMIN] == console.term.c_cc[VMIN]);
++    fclose(console.ios);
++    close(master);
++
++    /* A failed blank must reset the global mode and return to the prompt
++     * without waiting for an input byte. */
++    reset();
++    blank_error = EIO;
++    assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
++    console = (vt_t){ .fd = slave, .ios = fdopen(slave, "r+") };
++    assert(console.ios && tcgetattr(slave, &console.term) == 0);
++    vt_blank_until_key(&console);
++    assert(blank_power_mode == 3 && vesa_mode == 0 && reset_calls == 1);
++    assert(wake_calls == 1 && tcgetattr(slave, &restored) == 0);
++    assert(restored.c_lflag == console.term.c_lflag);
++    fclose(console.ios);
++    close(master);
++
++    /* A driver that rejects power-down still gets a blank/wake request. */
++    reset();
++    powerdown_error = EINVAL;
++    assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
++    console = (vt_t){ .fd = slave, .ios = fdopen(slave, "r+") };
++    assert(console.ios && tcgetattr(slave, &console.term) == 0);
++    assert(write(master, "x\n", 2) == 2);
++    vt_blank_until_key(&console);
++    assert(blank_power_mode == 0 && blank_calls == 1 && wake_calls == 1);
++    assert(vesa_mode == 0 && reset_calls == 1);
+     fclose(console.ios);
+     close(master);
+ 
+@@ -221,6 +286,6 @@
+     fclose(console.ios);
+     close(slave);
+     close(master);
+-    puts("9 VT transition/blanking/clearing regression checks passed (no physical VT accessed)");
+-    return 0;
+-}
++    puts("11 VT transition/power-down/clearing regression checks passed (no physical VT accessed)");
++    return 0;
++}
+--- a/install-user.py
++++ b/install-user.py
+@@ -43,9 +43,9 @@
+                    stdout=subprocess.DEVNULL, timeout=3)
+     target = USER_HOME / '.local/bin/sway-session-idle'
+     replace(source / 'sway-session-idle', target, 0o755)
+-    for name in ('main.c', 'Makefile'):
++    for name in ('main.c', 'vt.c', 'Makefile'):
+         replace(source / 'source' / name, legacy / 'source' / name, 0o644)
+-    for name in ('README.md', 'multi-output.patch'):
++    for name in ('README.md', 'multi-output.patch', 'idle-powerdown.patch'):
+         replace(source / name, legacy / name, 0o644)
+     replace(ROOT / '.build/idle/physlock', legacy / 'sway-tty-lock', 0o750)
+     # Stop only the previous supervisor for this exact Sway socket. Its SIGTERM
+--- a/install-vt-recovery.py
++++ b/install-vt-recovery.py
+@@ -1,4 +1,4 @@
+-"""Install only the reviewed TTY-lock recovery build, preserving a root backup."""
++"""Install the reviewed TTY-lock power-down build, preserving a root backup."""
+ from datetime import datetime
+ from pathlib import Path
+ from zoneinfo import ZoneInfo
+@@ -10,8 +10,8 @@
+ import subprocess
+ import tempfile
+ 
+-EXPECTED = "86440c35278a8dc398cb16712f58cdaabac1520a88489bbc8311e94d6a591df1"
+-PREVIOUS = "97d8ce9fb65bc494da4dc4e928d5de0c7df461d06c8f6e1e944ef14df365b1d1"
++EXPECTED = "7b912973960c22ddc9219c708e92787dafbb4ff49b228718a9d9aa50d2c9dcf2"
++PREVIOUS = "86440c35278a8dc398cb16712f58cdaabac1520a88489bbc8311e94d6a591df1"
+ ROOT = Path(__file__).resolve().parent.parent
+ TARGET = Path("/usr/local/bin/sway-tty-lock")
+ 
+--- a/install-terminal.py
++++ b/install-terminal.py
+@@ -6,7 +6,7 @@
+ import time
+ 
+ root = Path(__file__).resolve().parent.parent
+-print("TTY locker update: password prompts only, with a cleared console on every lock.", flush=True)
++print("TTY locker update: power down idle monitors and wake them for password entry.", flush=True)
+ print("Enter your administrator password in this terminal when prompted.", flush=True)
+ print("The installer replaces the reviewed binary and saves a backup.", flush=True)
+ status = root / '.build/idle/install-status.json'
+--- a/README.md
++++ b/README.md
+@@ -1,11 +1,27 @@
+ # Sway idle and console locking
+ 
+-On AC power, lock and blank after 30 minutes, then suspend after 60 minutes
+-of total inactivity. On battery, lock, blank and suspend after 5 minutes.
++On AC power, lock and power down the monitors after 30 minutes, then suspend
++after 60 minutes of total inactivity. On battery, lock, power down the monitors
++and suspend after 5 minutes.
+ The supervisor follows power-source changes and respects Sway idle inhibitors.
+ The login remains on tty1; locking uses a separate Linux virtual console and
+ authenticates with PAM. Both monitors mirror that console, so password entry
+ is shared and only one successful authentication is required.
++
++## Idle monitor power-down — 2026-11-06
++
++The console locker now selects VESA power-down mode (`TIOCL_SETVESABLANK`,
++mode 3) for the explicit blank request instead of only clearing the picture.
++It resets the global mode to 0 immediately after that request, before waiting
++for a key. This keeps power-down from leaking into suspend or the return to
++Sway. A key wakes the monitors and opens the existing password prompt;
++authentication and the idle/suspend timeouts are unchanged.
++
++The kernel passes the selected mode to the console driver when blanking;
++changing the mode afterward does not itself unblank the console. See the
++[Linux VT implementation](https://github.com/torvalds/linux/blob/master/drivers/tty/vt/vt.c).
++Actual monitor power-down depends on the console driver's support. Failed
++mode-selection, blanking and reset ioctls are recorded in the journal.
+ 
+ ## Prompt-only unlocking — 2026-11-06
+ 
+@@ -57,8 +73,8 @@
+ The locker uses a monotonic 5-second deadline instead of an unbounded
+ `VT_WAITACTIVE`, reissuing activation every 500 ms. If returning to Sway fails
+ after authentication, VT switching stays available and diagnostics are written
+-to the journal. Console blanking does not enable
+-global VESA power-down. The detached parent reports readiness only after the
++to the journal. Global VESA power-down is reset immediately after the blank
++request, before waiting for input. The detached parent reports readiness only after the
+ child has secured the console. PAM authentication and console locking remain
+ in the privileged executable.
+ 
+@@ -76,8 +92,8 @@
+ ```
+ 
+ PAM headers come from `pam-devel` or `.build/idle-deps/usr/include`; the build
+-links to the installed PAM and systemd libraries. The checks cover nine VT
+-handoff/blanking/clearing cases, five readiness/authentication flows and ten output
++links to the installed PAM and systemd libraries. The checks cover eleven VT
++handoff/power-down/clearing cases, five readiness/authentication flows and ten output
+ recovery cases. They use simulated VT ioctls, simulated PAM and a disposable
+ PTY; they do not lock or suspend the live session. The PAM stub checks that a
+ Portuguese caller still starts authentication with the C locale.
+@@ -86,6 +102,9 @@
+ The tests also cover clearing stale success text before VT activation, clearing
+ on release, and the absence of console notices after successful authentication
+ or a failed handoff back to the session.
++The power-down tests verify mode 3 at the blank request, mode 0 before the
++wake-key read, terminal restoration and cleanup when a blank request fails.
++They also check that a rejected power-down mode still permits blanking and waking.
+ 
+ The new output tests cover both monitors, disabled and powered-off outputs,
+ command failures, restoration after partial failure, process-query failure,
+@@ -114,13 +133,13 @@
+ active locker, saves the previous executable under `/var/backups/sway-tty-lock/`,
+ installs atomically with `root:user` and mode `4750`, restores SELinux context
+ and verifies only `-h`/`-v`. Its version is
+-`physlock 13+rice-silent-unlock-20261106`. It requires the operating system's
++`physlock 13+rice-idle-powerdown-20261106`. It requires the operating system's
+ administrator authentication. Neither installer locks or suspends the session.
+ 
+ `physlock.patch` records the original blanking change; `vt-recovery.patch`
+ records the first VT fix; `multi-output.patch` records this update against the
+-previously installed sources and supervisor. The `source/` tree contains the
+-current implementation.
++previously installed sources and supervisor. `idle-powerdown.patch` records
++the idle power-down change. The `source/` tree contains the current implementation.
+ 
+ Useful diagnostics:
+ 

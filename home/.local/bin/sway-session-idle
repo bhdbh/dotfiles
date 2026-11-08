@@ -1,0 +1,332 @@
+#!/usr/bin/python3
+"""Power-aware Sway idling, with password authentication on a Linux console."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+from gi.repository import Gio, GLib
+
+LOCKER = Path('/usr/local/bin/sway-tty-lock')
+POLICIES = {'ac': (1800, 3600), 'battery': (300, 300)}
+LOGIN = 'org.freedesktop.login1'
+LOGIN_PATH = '/org/freedesktop/login1'
+SELF = str(Path(__file__).resolve())
+
+
+def power_source(root=Path('/sys/class/power_supply')):
+    batteries = False
+    for supply in root.iterdir():
+        try:
+            kind = (supply / 'type').read_text().strip()
+            if kind == 'Battery':
+                batteries = True
+            elif (supply / 'online').read_text().strip() == '1':
+                return 'ac'
+        except OSError:
+            continue
+    return 'battery' if batteries else 'ac'
+
+
+def bus_call(interface, method, arguments, reply=None, path=LOGIN_PATH):
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    return bus.call_sync(LOGIN, path, interface, method, arguments,
+                         GLib.VariantType.new(reply) if reply else None,
+                         Gio.DBusCallFlags.NONE, 3000, None).unpack()
+
+
+def session_path():
+    sway_pid = int(Path(os.environ['SWAYSOCK']).name.split('.')[2])
+    path, = bus_call(LOGIN + '.Manager', 'GetSessionByPID',
+                     GLib.Variant('(u)', (sway_pid,)), '(o)')
+    return path
+
+
+def session_tty(path=None):
+    number, = bus_call('org.freedesktop.DBus.Properties', 'Get',
+                       GLib.Variant('(ss)', (LOGIN + '.Session', 'VTNr')),
+                       '(v)', path or session_path())
+    return 'tty' + str(number)
+
+
+def lock_processes():
+    result = subprocess.run(['pgrep', '-U', str(os.getuid()), '-x', LOCKER.name],
+                            capture_output=True, text=True)
+    if result.returncode not in (0, 1):
+        raise RuntimeError('Could not check the console locker processes.')
+    return result.stdout.split()
+
+
+def sway_query(kind):
+    return json.loads(subprocess.check_output(
+        ['swaymsg', '-r', '-t', kind], text=True, timeout=3))
+
+
+def output_power(name, enabled):
+    command = 'output ' + json.dumps(name) + ' power ' + ('on' if enabled else 'off')
+    result = json.loads(subprocess.check_output(
+        ['swaymsg', '-r', command], text=True, timeout=3))
+    if not result or not all(item.get('success') for item in result):
+        raise RuntimeError(f'Output power command failed: {result}')
+
+
+def recover_outputs():
+    # Power cycling forces a fresh modeset after the console hands DRM back to
+    # Sway. Unlike disable/enable, this keeps workspaces and windows in place.
+    outputs = [item['name'] for item in sway_query('get_outputs')
+               if item.get('active') and item.get('power', item.get('dpms', True))
+               and not item.get('non_desktop')]
+    if not outputs:
+        return
+    failures = []
+    try:
+        for name in outputs:
+            output_power(name, False)
+        time.sleep(0.2)
+    finally:
+        # Restore every original output even if one command failed. Power on
+        # does not enable an output disabled by the lid binding in the meantime.
+        for name in outputs:
+            try:
+                output_power(name, True)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+                failures.append(error)
+        if failures:
+            raise RuntimeError('Could not restore output power: ' +
+                               '; '.join(str(error) for error in failures))
+    print('sway-session-idle: refreshed outputs after unlock: ' +
+          ', '.join(outputs), flush=True)
+
+
+def runtime():
+    identity = hashlib.sha256(os.environ['SWAYSOCK'].encode()).hexdigest()[:12]
+    path = Path(os.environ['XDG_RUNTIME_DIR']) / ('sway-idle-' + identity)
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def ready():
+    try:
+        details = LOCKER.stat()
+        return (details.st_uid == 0 and bool(details.st_mode & stat.S_ISUID)
+                and os.access(LOCKER, os.X_OK) and shutil.which('swayidle')
+                and Path('/etc/pam.d/physlock').is_file())
+    except OSError:
+        return False
+
+
+def ensure_locked():
+    if not ready():
+        raise RuntimeError('Run ~/.config/sway/idle/setup-system.sh first.')
+    with (runtime() / 'locking').open('a') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        if lock_processes():
+            return
+        active = Path('/sys/class/tty/tty0/active').read_text().strip()
+        if active != session_tty():
+            raise RuntimeError('Another console is active; cannot lock a different session.')
+        subprocess.run([str(LOCKER), '-db'], check=True, timeout=4)
+        if not lock_processes():
+            raise RuntimeError('The console locker did not remain active.')
+
+
+def command(source):
+    blank, suspend = POLICIES[source]
+    args = ['swayidle', '-w']
+    if blank == suspend:
+        args += ['timeout', str(suspend), SELF + ' --suspend']
+    else:
+        args += ['timeout', str(blank), SELF + ' --lock',
+                 'timeout', str(suspend), SELF + ' --suspend']
+    # This also initializes swayidle's logind connection before inhibitor queries.
+    args += ['idlehint', str(blank)]
+    return args
+
+
+class Idle:
+    def __init__(self):
+        self.loop = GLib.MainLoop()
+        self.child = None
+        self.source = None
+        self.inhibitor = None
+        self.stopping = False
+        self.return_from_lock = False
+        self.recovery_timer = None
+        self.recovery_deadline = 0
+        self.tty = None
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+
+    def session_event(self, connection, sender, path, interface, name, parameters):
+        changed_interface, changed, unused = parameters.unpack()
+        if changed_interface != LOGIN + '.Session' or 'Active' not in changed:
+            return
+        try:
+            if not changed['Active']:
+                self.return_from_lock = bool(lock_processes())
+                if self.recovery_timer is not None:
+                    GLib.source_remove(self.recovery_timer)
+                    self.recovery_timer = None
+            elif self.return_from_lock and self.recovery_timer is None:
+                # VT_GETSTATE may change before DRM reacquisition and the
+                # detached locker cleanup finish. Give both time to settle.
+                self.recovery_deadline = time.monotonic() + 10
+                self.recovery_timer = GLib.timeout_add(400, self.recover_after_unlock)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print('sway-session-idle:', error, file=sys.stderr, flush=True)
+
+    def recover_after_unlock(self):
+        try:
+            if time.monotonic() >= self.recovery_deadline:
+                raise RuntimeError('Timed out waiting for the console locker to exit.')
+            with (runtime() / 'locking').open('a') as guard:
+                try:
+                    fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                if lock_processes() or Path('/sys/class/tty/tty0/active').read_text().strip() != self.tty:
+                    return True
+                recover_outputs()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            print('sway-session-idle:', error, file=sys.stderr, flush=True)
+        self.return_from_lock = False
+        self.recovery_timer = None
+        return False
+
+    def acquire_inhibitor(self):
+        reply, descriptors = self.bus.call_with_unix_fd_list_sync(
+            LOGIN, LOGIN_PATH, LOGIN + '.Manager', 'Inhibit',
+            GLib.Variant('(ssss)', ('sleep', 'Sway',
+                'Authenticate on the console before suspending', 'delay')),
+            GLib.VariantType.new('(h)'), Gio.DBusCallFlags.NONE,
+            3000, None, None)
+        self.inhibitor = descriptors.get(reply.unpack()[0])
+
+    def sleep_event(self, connection, sender, path, interface, name, parameters):
+        sleeping, = parameters.unpack()
+        if sleeping:
+            try:
+                ensure_locked()
+            except (OSError, RuntimeError, subprocess.SubprocessError, GLib.Error) as error:
+                print('sway-session-idle:', error, file=sys.stderr, flush=True)
+            finally:
+                if self.inhibitor is not None:
+                    os.close(self.inhibitor)
+                    self.inhibitor = None
+        else:
+            try:
+                self.acquire_inhibitor()
+            except GLib.Error as error:
+                print('sway-session-idle:', error, file=sys.stderr, flush=True)
+
+    def stop_child(self):
+        if self.child is not None:
+            self.child.terminate()
+            try:
+                self.child.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+                self.child.wait()
+            self.child = None
+
+    def refresh(self, *unused):
+        source = power_source()
+        if source != self.source or self.child is None or self.child.poll() is not None:
+            self.stop_child()
+            self.source = source
+            self.child = subprocess.Popen(command(source))
+            blank, suspend = POLICIES[source]
+            (runtime() / 'status.json').write_text(json.dumps({
+                'power': source, 'screen_off_seconds': blank,
+                'suspend_seconds': suspend, 'pid': os.getpid(),
+                'swayidle_pid': self.child.pid}) + '\n')
+            print(f'sway-session-idle: {source}: screen off {blank}s, suspend {suspend}s', flush=True)
+        return True
+
+    def stop(self, *unused):
+        if self.stopping:
+            return False
+        self.stopping = True
+        if self.recovery_timer is not None:
+            GLib.source_remove(self.recovery_timer)
+            self.recovery_timer = None
+        self.stop_child()
+        if self.inhibitor is not None:
+            os.close(self.inhibitor)
+            self.inhibitor = None
+        self.loop.quit()
+        return False
+
+    def run(self):
+        with (runtime() / 'daemon').open('a') as guard:
+            try:
+                fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            if not ready():
+                raise RuntimeError('The console locker system installation is still pending.')
+            path = session_path()
+            self.tty = session_tty(path)
+            self.bus.signal_subscribe(LOGIN, 'org.freedesktop.DBus.Properties',
+                'PropertiesChanged', path, LOGIN + '.Session', Gio.DBusSignalFlags.NONE,
+                self.session_event)
+            self.return_from_lock = bool(lock_processes())
+            self.acquire_inhibitor()
+            self.bus.signal_subscribe(LOGIN, LOGIN + '.Manager', 'PrepareForSleep',
+                LOGIN_PATH, None, Gio.DBusSignalFlags.NONE, self.sleep_event)
+            self.refresh()
+            GLib.timeout_add_seconds(5, self.refresh)
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self.stop)
+            listener = subprocess.Popen(['swaymsg', '-r', '-m', '-t', 'subscribe',
+                '["shutdown"]'], stdout=subprocess.DEVNULL)
+            GLib.child_watch_add(GLib.PRIORITY_DEFAULT, listener.pid, self.stop)
+            try:
+                self.loop.run()
+            finally:
+                self.stop()
+                if listener.poll() is None:
+                    listener.terminate()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--lock', action='store_true')
+    mode.add_argument('--suspend', action='store_true')
+    mode.add_argument('--status', action='store_true')
+    args = parser.parse_args()
+    if args.status:
+        source = power_source()
+        blank, suspend = POLICIES[source]
+        state_path = runtime() / 'status.json'
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        pid = state.get('pid')
+        try:
+            running = bool(pid and SELF.encode() in Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0'))
+        except OSError:
+            running = False
+        print(json.dumps({'power': source, 'screen_off_seconds': blank,
+            'suspend_seconds': suspend, 'ready': bool(ready()), 'running': running,
+            'tty': session_tty(), 'lock_processes': lock_processes()}))
+    elif args.lock or args.suspend:
+        ensure_locked()
+        if args.suspend:
+            subprocess.run(['systemctl', 'suspend'], check=True)
+    else:
+        Idle().run()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, GLib.Error) as error:
+        print('sway-session-idle:', error, file=sys.stderr)
+        raise SystemExit(1)

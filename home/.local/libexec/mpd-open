@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""Open local audio files in MPD and show ncmpcpp in Foot."""
+
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+from urllib.parse import unquote, urlsplit
+
+
+def quote(value):
+    if any(character in value for character in ("\n", "\r", "\0")):
+        raise ValueError("MPD cannot open paths containing newlines or NUL")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def local_path(argument):
+    if argument.startswith("file:"):
+        uri = urlsplit(argument)
+        if uri.netloc not in ("", "localhost"):
+            raise ValueError("Only local file URIs are supported")
+        argument = unquote(uri.path)
+    path = Path(argument).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise ValueError(f"Not a music file: {path}")
+    quote(str(path))
+    return str(path)
+
+
+def command(stream, value):
+    stream.write((value + "\n").encode())
+    stream.flush()
+    response = []
+    while True:
+        line = stream.readline().decode().rstrip("\n")
+        if line == "OK":
+            return response
+        if not line or line.startswith("ACK "):
+            raise RuntimeError(line or "MPD disconnected")
+        response.append(line)
+
+
+def main():
+    paths = [local_path(argument) for argument in sys.argv[1:]]
+    subprocess.run(["/usr/bin/systemctl", "--user", "start", "mpd.service"], check=True)
+    if paths:
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.settimeout(10)
+            connection.connect(str(runtime / "mpd/socket"))
+            with connection.makefile("rwb") as stream:
+                greeting = stream.readline()
+                if not greeting.startswith(b"OK MPD "):
+                    raise RuntimeError("Invalid MPD greeting")
+                identifiers = []
+                for path in paths:
+                    response = command(stream, "addid " + quote(path))
+                    identifiers.append(next(line.removeprefix("Id: ") for line in response if line.startswith("Id: ")))
+                command(stream, "playid " + identifiers[0])
+    os.execv("/usr/bin/foot", ["foot", "--app-id=ncmpcpp", "--title=ncmpcpp", "/usr/bin/ncmpcpp"])
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        message = f"Could not open music: {error}"
+        print(message, file=sys.stderr)
+        subprocess.run(["/usr/bin/notify-send", "MPD", message], check=False)
+        sys.exit(1)

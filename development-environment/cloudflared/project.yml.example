@@ -1,0 +1,9 @@
+# Preencher ao configurar o túnel do projeto gerenciado localmente.
+# Salvar a configuração preenchida em ~/.cloudflared/config.yml.
+tunnel: UUID_DO_TUNEL
+credentials-file: /home/user/.cloudflared/UUID_DO_TUNEL.json
+
+ingress:
+  - hostname: DOMINIO_DO_PROJETO
+    service: http://127.0.0.1:PORTA_LOCAL
+  - service: http_status:404

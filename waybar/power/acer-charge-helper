@@ -1,0 +1,151 @@
+#!/usr/bin/python3 -I
+"""Toggle and preserve the Acer firmware's 80%/100% charge limit."""
+from contextlib import contextmanager
+import fcntl
+import logging
+import os
+from pathlib import Path
+import re
+import signal
+import sys
+import tempfile
+
+HEALTH_MODE = Path('/sys/bus/wmi/drivers/acer-wmi-battery/health_mode')
+CONFIG = Path('/etc/modprobe.d/waybar-acer-charge.conf')
+LOCK = Path('/run/waybar-acer-charge/lock')
+LOG = logging.getLogger('waybar-acer-charge')
+
+
+class ChargeControl:
+    def __init__(self, mode=HEALTH_MODE, config=CONFIG, lock=LOCK):
+        self.mode = mode
+        self.config = config
+        self.lock = lock
+
+    @contextmanager
+    def locked(self):
+        # The click helper and the service must commit a change together.
+        self.lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(self.lock, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+        with os.fdopen(descriptor, 'a') as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            yield
+
+    def current(self):
+        mode = self.mode.read_text().strip()
+        if mode not in ('0', '1'):
+            raise ValueError('The Acer firmware does not expose a supported health mode.')
+        return mode
+
+    def saved(self):
+        try:
+            contents = self.config.read_text()
+        except FileNotFoundError:
+            return None
+        match = re.fullmatch(r'\s*options acer-wmi-battery enable_health_mode=([01])\s*', contents)
+        if match is None:
+            raise ValueError('The saved Acer charge mode is invalid.')
+        return match[1]
+
+    def save(self, target):
+        descriptor, temporary = tempfile.mkstemp(prefix='.waybar-acer-charge-', dir=self.config.parent)
+        try:
+            with os.fdopen(descriptor, 'w') as output:
+                output.write(f'options acer-wmi-battery enable_health_mode={target}\n')
+                output.flush()
+                os.fchmod(output.fileno(), 0o644)
+                os.fsync(output.fileno())
+            os.replace(temporary, self.config)
+            directory = os.open(self.config.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    def apply(self, target, *, force=False):
+        if force or self.current() != target:
+            self.mode.write_text(target + '\n')
+            if self.current() != target:
+                raise RuntimeError('The Acer firmware did not accept the requested charge limit.')
+            LOG.info('Applied %s%% charge limit', '80' if target == '1' else '100')
+
+    def toggle(self):
+        with self.locked():
+            current = self.current()
+            target = '0' if current == '1' else '1'
+            self.apply(target)
+            try:
+                self.save(target)
+            except OSError:
+                self.apply(current, force=True)
+                raise
+            return target
+
+    def restore(self, *, force=False):
+        with self.locked():
+            target = self.saved()
+            if target is None:
+                # First install adopts the current choice, without imposing 80%.
+                target = self.current()
+                self.save(target)
+            self.apply(target, force=force)
+
+
+def watch(controller):
+    from gi.repository import Gio, GLib
+
+    loop = GLib.MainLoop()
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    failed = False
+
+    def update(force=False):
+        nonlocal failed
+        try:
+            controller.restore(force=force)
+        except (OSError, ValueError, RuntimeError):
+            LOG.exception('Could not restore the saved Acer charge mode')
+            failed = True
+            loop.quit()
+            return GLib.SOURCE_REMOVE
+        return GLib.SOURCE_CONTINUE
+
+    def resumed(_bus, _sender, _path, _interface, _signal, parameters, _data):
+        if not parameters.unpack()[0]:
+            # health_mode_show returns a driver cache. Even an unchanged read
+            # cannot prove the firmware kept the mode across suspend.
+            update(force=True)
+
+    def stop():
+        loop.quit()
+        return GLib.SOURCE_REMOVE
+
+    bus.signal_subscribe('org.freedesktop.login1', 'org.freedesktop.login1.Manager',
+                         'PrepareForSleep', '/org/freedesktop/login1', None,
+                         Gio.DBusSignalFlags.NONE, resumed, None)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, stop)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, stop)
+    GLib.timeout_add_seconds(5, update)
+    update(force=True)
+    if not failed:
+        loop.run()
+    if failed:
+        raise SystemExit(1)
+
+
+def main():
+    if os.geteuid() != 0 or sys.argv[1:] not in ([], ['--restore'], ['--watch']):
+        raise SystemExit('This helper requires root; use no arguments, --restore or --watch.')
+    controller = ChargeControl()
+    if sys.argv[1:] == ['--watch']:
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+        watch(controller)
+    elif sys.argv[1:] == ['--restore']:
+        controller.restore(force=True)
+    else:
+        print('80' if controller.toggle() == '1' else '100')
+
+
+if __name__ == '__main__':
+    main()

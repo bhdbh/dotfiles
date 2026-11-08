@@ -1,0 +1,15 @@
+[Unit]
+Description=Anyrun Launcher Daemon
+Documentation=https://github.com/anyrun-org/anyrun
+PartOf=sway-session.target
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=@HOME@/.cargo/bin/anyrun daemon
+Environment=PATH=@HOME@/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=sway-session.target

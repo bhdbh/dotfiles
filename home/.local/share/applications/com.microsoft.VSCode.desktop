@@ -1,0 +1,30 @@
+[Desktop Entry]
+Name=Visual Studio Code
+Comment=Code Editing. Redefined.
+GenericName=Text Editor
+Exec=/usr/bin/code --reuse-window %F
+Icon=vscode
+Type=Application
+StartupNotify=false
+StartupWMClass=com.microsoft.VSCode
+Categories=Utility;TextEditor;Development;IDE;
+MimeType=application/ecmascript;application/javascript;application/json;application/json-patch+json;application/json5;application/ld+json;application/rtf;application/schema+json;application/sql;application/toml;application/x-bat;application/x-code-workspace;application/x-csh;application/x-desktop;application/x-docbook+xml;application/x-fishscript;application/x-httpd-php;application/x-ipynb+json;application/x-ndjson;application/x-perl;application/x-php;application/x-powershell;application/x-python;application/x-ruby;application/x-sh;application/x-shellscript;application/x-yaml;application/xhtml+xml;application/xml;application/xml-dtd;application/xml-external-parsed-entity;application/xslt+xml;application/yaml;text/cache-manifest;text/calendar;text/css;text/csv;text/csv-schema;text/enriched;text/html;text/htmlh;text/javascript;text/jscript.encode;text/julia;text/markdown;text/org;text/plain;text/rfc822-headers;text/richtext;text/rust;text/sgml;text/spreadsheet;text/tab-separated-values;text/tcl;text/troff;text/turtle;text/vbscript;text/vbscript.encode;text/vcard;text/vnd.familysearch.gedcom;text/vnd.graphviz;text/vnd.rn-realtext;text/vnd.senx.warpscript;text/vnd.sun.j2me.app-descriptor;text/vnd.trolltech.linguist;text/vnd.wap.wml;text/vnd.wap.wmlscript;text/vtt;text/x-adasrc;text/x-authors;text/x-basic;text/x-bibtex;text/x-blueprint;text/x-c++hdr;text/x-c++src;text/x-changelog;text/x-chdr;text/x-cmake;text/x-cobol;text/x-common-lisp;text/x-component;text/x-copying;text/x-credits;text/x-crystal;text/x-csharp;text/x-csrc;text/x-dbus-service;text/x-dcl;text/x-devicetree-source;text/x-dsl;text/x-dsrc;text/x-eiffel;text/x-elixir;text/x-emacs-lisp;text/x-erlang;text/x-fortran;text/x-gcode-gx;text/x-genie;text/x-gettext-translation;text/x-gettext-translation-template;text/x-gherkin;text/x-go;text/x-google-video-pointer;text/x-gradle;text/x-groovy;text/x-haskell;text/x-iMelody;text/x-idl;text/x-install;text/x-iptables;text/x-java;text/x-kaitai-struct;text/x-kotlin;text/x-ldif;text/x-lilypond;text/x-literate-haskell;text/x-log;text/x-lua;text/x-makefile;text/x-matlab;text/x-maven+xml;text/x-meson;text/x-microdvd;text/x-moc;text/x-modelica;text/x-mof;text/x-mpl2;text/x-mpsub;text/x-mrml;text/x-ms-regedit;text/x-mup;text/x-nfo;text/x-nim;text/x-nimscript;text/x-objc++src;text/x-objcsrc;text/x-ocaml;text/x-ocl;text/x-ooc;text/x-opencl-src;text/x-opml+xml;text/x-pascal;text/x-patch;text/x-python;text/x-python3;text/x-qml;text/x-readme;text/x-reject;text/x-rpm-spec;text/x-rst;text/x-sagemath;text/x-sass;text/x-scala;text/x-scheme;text/x-scons;text/x-scss;text/x-setext;text/x-ssa;text/x-subviewer;text/x-svhdr;text/x-svsrc;text/x-systemd-unit;text/x-tex;text/x-texinfo;text/x-todo-txt;text/x-troff-me;text/x-troff-mm;text/x-troff-ms;text/x-twig;text/x-txt2tags;text/x-typst;text/x-uil;text/x-uri;text/x-uuencode;text/x-vala;text/x-vb;text/x-verilog;text/x-vhdl;text/x-xmi;text/x-xslfo;text/x.gcode;text/xmcd;
+Actions=new-empty-window;
+Keywords=vscode;
+TryExec=/usr/bin/code
+
+[Desktop Action new-empty-window]
+Name=New Empty Window
+Name[cs]=Nové prázdné okno
+Name[de]=Neues leeres Fenster
+Name[es]=Nueva ventana vacía
+Name[fr]=Nouvelle fenêtre vide
+Name[it]=Nuova finestra vuota
+Name[ja]=新しい空のウィンドウ
+Name[ko]=새 빈 창
+Name[ru]=Новое пустое окно
+Name[zh_CN]=新建空窗口
+Name[zh_TW]=開新空視窗
+Exec=/usr/share/code/code --new-window %F
+Icon=vscode
+
