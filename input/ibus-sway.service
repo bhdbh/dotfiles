@@ -1,0 +1,17 @@
+[Unit]
+BindsTo=sway-session.service
+PartOf=sway-session.service
+After=sway-session.service
+Description=IBus with native Wayland input for Sway
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Do not restart against a compositor that has already exited.
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=/usr/libexec/ibus-ui-gtk3 --enable-wayland-im --exec-daemon "--daemon-args=--xim --panel disable"
+Environment=XMODIFIERS=@im=ibus "QT_IM_MODULES=wayland;ibus"
+Restart=always
+RestartSec=2
+TimeoutStopSec=5

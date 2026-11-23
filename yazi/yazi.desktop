@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Yazi
+GenericName=File Manager
+Comment=Terminal file manager
+Exec=foot --app-id=yazi yazi %f
+TryExec=yazi
+Terminal=false
+Icon=system-file-manager
+Categories=System;FileTools;FileManager;
+Keywords=Files;Folders;Explorer;
+MimeType=inode/directory;

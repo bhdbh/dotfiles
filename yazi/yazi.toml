@@ -1,0 +1,25 @@
+# Yazi 25.5.31: shell arguments use "$@"; filename rules use `name`.
+[mgr]
+show_hidden = true
+
+[opener]
+edit = [
+    { run = '"$HOME/.local/bin/dotfiles-open-text" --terminal "$@"', block = true, desc = "Edit", for = "linux" },
+]
+micro = [
+    { run = 'micro "$@"', block = true, desc = "Micro", for = "linux" },
+]
+image = [
+    { run = 'swayimg "$@"', orphan = true, desc = "Swayimg", for = "linux" },
+]
+play = [
+    { run = 'mpv --player-operation-mode=pseudo-gui -- "$@"', orphan = true, desc = "mpv", for = "linux" },
+]
+
+[open]
+prepend_rules = [
+    # Filename matching is case-insensitive in this version of Yazi.
+    { name = "*.txt", use = ["micro", "edit", "reveal"] },
+    { mime = "image/*", use = ["image", "reveal"] },
+    { mime = "{audio,video}/*", use = ["play", "reveal"] },
+]

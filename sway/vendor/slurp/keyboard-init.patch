@@ -1,0 +1,22 @@
+--- a/main.c
++++ b/main.c
+@@ -305,6 +305,9 @@
+ 		const uint32_t key_state) {
+ 	struct slurp_seat *seat = data;
+ 	struct slurp_state *state = seat->state;
++	if (seat->xkb_state == NULL) {
++		return;
++	}
+ 	const xkb_keysym_t keysym = xkb_state_key_get_one_sym(seat->xkb_state, key + 8);
+ 
+ 	switch (key_state) {
+@@ -351,6 +354,9 @@
+ 		const uint32_t mods_latched, const uint32_t mods_locked,
+ 		const uint32_t group) {
+ 	struct slurp_seat *seat = data;
++	if (seat->xkb_state == NULL) {
++		return;
++	}
+ 	xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched,
+ 			mods_locked, 0, 0, group);
+ }

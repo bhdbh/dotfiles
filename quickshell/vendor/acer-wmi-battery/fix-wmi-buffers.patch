@@ -1,0 +1,135 @@
+--- a/acer-wmi-battery.c
++++ b/acer-wmi-battery.c
+@@ -10,6 +10,7 @@
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+ #include <linux/limits.h>
++#include <linux/string.h>
+ #include <linux/module.h>
+ #include <linux/acpi.h>
+ #include <linux/version.h>
+@@ -98,7 +99,7 @@
+ 	if (!obj)
+ 		return AE_ERROR;
+ 
+-	if (obj->type != ACPI_TYPE_BUFFER) {
++	if (obj->type != ACPI_TYPE_BUFFER || !obj->buffer.pointer) {
+ 		kfree(obj);
+ 		return AE_ERROR;
+ 	}
+@@ -148,20 +149,19 @@
+ 	obj = output.pointer;
+ 	if (!obj)
+ 		return AE_ERROR;
+-	else if (obj->type != ACPI_TYPE_BUFFER) {
++	else if (obj->type != ACPI_TYPE_BUFFER || !obj->buffer.pointer) {
+ 		kfree(obj);
+ 		return AE_ERROR;
+ 	}
+ 
+-	ret = *((struct get_battery_health_control_status_output *)
+-			obj->buffer.pointer);
+-	if (obj->buffer.length != 8) {
++	if (obj->buffer.length != sizeof(ret)) {
+ 		pr_err("WMI battery status call returned a buffer of "
+ 		       "unexpected length %d\n", obj->buffer.length);
+ 		kfree(obj);
+ 		return AE_ERROR;
+ 	}
+ 
++	memcpy(&ret, obj->buffer.pointer, sizeof(ret));
+ 	bat_status->health_mode = ret.uFunctionList & HEALTH_MODE ?
+ 					  ret.uFunctionStatus[0] > 0 :
+ 					  -1;
+@@ -187,7 +187,6 @@
+ 		.uFunctionStatus = (u8)function_status,
+ 		.uReservedIn = { 0x0, 0x0, 0x0, 0x0, 0x0 }
+ 	};
+-	struct set_battery_health_control_output ret;
+ 
+ 	struct acpi_buffer input = {
+ 		sizeof(struct set_battery_health_control_input), &params
+@@ -203,13 +202,12 @@
+ 
+ 	if (!obj)
+ 		return AE_ERROR;
+-	else if (obj->type != ACPI_TYPE_BUFFER) {
++	else if (obj->type != ACPI_TYPE_BUFFER || !obj->buffer.pointer) {
+ 		kfree(obj);
+ 		return AE_ERROR;
+ 	}
+ 
+-	ret = *((struct set_battery_health_control_output *)obj->buffer.pointer);
+-
++	/* Method 21 returns four bytes upstream; their contents are unused. */
+ 	if (obj->buffer.length != 4) {
+ 		pr_err("WMI battery status set operation returned "
+ 			"a buffer of unexpected length %d\n",
+@@ -255,10 +253,13 @@
+ 	return status;
+ }
+ 
+-static void update_state(void)
++static acpi_status update_state(void)
+ {
+ 	struct battery_info old_state = battery_status;
+-	get_battery_health_control_status(&battery_status);
++	acpi_status status = get_battery_health_control_status(&battery_status);
++
++	if (ACPI_FAILURE(status))
++		return status;
+ 	if (battery_status.calibration_mode != old_state.calibration_mode)
+ 		pr_info("%s calibration mode\n",
+ 			battery_status.calibration_mode ? "enabled" :
+@@ -266,6 +267,7 @@
+ 	if (battery_status.health_mode != old_state.health_mode)
+ 		pr_info("%s health mode\n",
+ 			battery_status.health_mode ? "enabled" : "disabled");
++	return AE_OK;
+ }
+ 
+ static ssize_t temperature_show(struct device_driver *driver, char *buf)
+@@ -301,6 +303,7 @@
+ {
+ 	bool param_val;
+ 	int err;
++	acpi_status status;
+ 	if (battery_status.health_mode < 0)
+ 		return 0;
+ 
+@@ -308,8 +311,11 @@
+ 	if (err)
+ 		return err;
+ 
+-	set_battery_health_control(HEALTH_MODE, param_val);
+-	update_state();
++	status = set_battery_health_control(HEALTH_MODE, param_val);
++	if (ACPI_FAILURE(status))
++		return -EIO;
++	if (ACPI_FAILURE(update_state()))
++		return -EIO;
+ 
+ 	return count;
+ }
+@@ -328,6 +334,7 @@
+ {
+ 	bool param_val;
+ 	int err;
++	acpi_status status;
+ 
+ 	if (battery_status.calibration_mode < 0)
+ 		return 0;
+@@ -336,8 +343,11 @@
+ 	if (err)
+ 		return err;
+ 
+-	set_battery_health_control(CALIBRATION_MODE, param_val);
+-	update_state();
++	status = set_battery_health_control(CALIBRATION_MODE, param_val);
++	if (ACPI_FAILURE(status))
++		return -EIO;
++	if (ACPI_FAILURE(update_state()))
++		return -EIO;
+ 
+ 	return count;
+ }

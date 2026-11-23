@@ -1,0 +1,128 @@
+# Tailwind CSS Zinc, matching Sway, Foot and Quickshell.
+# The installed Yazi 25.5.31 uses [mgr] and syntect_theme here.
+
+[mgr]
+cwd = { fg = "#d4d4d8", bold = true }
+hovered = { fg = "#09090b", bg = "#fafafa", bold = true }
+preview_hovered = { fg = "#fafafa", bg = "#27272a", underline = false }
+find_keyword = { fg = "#09090b", bg = "#d4d4d8", bold = true }
+find_position = { fg = "#d4d4d8", bold = true }
+symlink_target = { fg = "#a1a1aa", italic = true }
+marker_copied = { fg = "#d4d4d8", bg = "#d4d4d8" }
+marker_cut = { fg = "#71717a", bg = "#71717a" }
+marker_marked = { fg = "#a1a1aa", bg = "#a1a1aa" }
+marker_selected = { fg = "#fafafa", bg = "#fafafa" }
+count_copied = { fg = "#09090b", bg = "#d4d4d8" }
+count_cut = { fg = "#fafafa", bg = "#52525b" }
+count_selected = { fg = "#09090b", bg = "#fafafa" }
+border_style = { fg = "#52525b" }
+syntect_theme = "~/.config/yazi/zinc.tmTheme"
+
+[tabs]
+active = { fg = "#09090b", bg = "#fafafa", bold = true }
+inactive = { fg = "#a1a1aa", bg = "#18181b" }
+sep_inner = { open = "▐", close = "▌" }
+sep_outer = { open = "▐", close = "▌" }
+
+[mode]
+normal_main = { fg = "#09090b", bg = "#fafafa", bold = true }
+normal_alt = { fg = "#d4d4d8", bg = "#27272a" }
+select_main = { fg = "#09090b", bg = "#d4d4d8", bold = true }
+select_alt = { fg = "#e4e4e7", bg = "#3f3f46" }
+unset_main = { fg = "#fafafa", bg = "#52525b", bold = true }
+unset_alt = { fg = "#d4d4d8", bg = "#27272a" }
+
+[status]
+overall = { fg = "#d4d4d8", bg = "#18181b" }
+sep_left = { open = "▐", close = "▌" }
+sep_right = { open = "▐", close = "▌" }
+perm_sep = { fg = "#71717a" }
+perm_type = { fg = "#fafafa" }
+perm_read = { fg = "#d4d4d8" }
+perm_write = { fg = "#a1a1aa" }
+perm_exec = { fg = "#e4e4e7" }
+progress_label = { fg = "#fafafa", bold = true }
+progress_normal = { fg = "#a1a1aa", bg = "#27272a" }
+progress_error = { fg = "#fafafa", bg = "#52525b" }
+
+[which]
+mask = { bg = "#18181b" }
+cand = { fg = "#fafafa", bold = true }
+rest = { fg = "#a1a1aa" }
+desc = { fg = "#d4d4d8" }
+separator = " -> "
+separator_style = { fg = "#71717a" }
+
+[confirm]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa", bold = true }
+content = { fg = "#d4d4d8" }
+list = { fg = "#d4d4d8" }
+btn_yes = { fg = "#09090b", bg = "#fafafa", bold = true }
+btn_no = { fg = "#a1a1aa" }
+
+[spot]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa", bold = true }
+tbl_col = { fg = "#d4d4d8" }
+tbl_cell = { fg = "#09090b", bg = "#fafafa" }
+
+[notify]
+title_info = { fg = "#d4d4d8" }
+title_warn = { fg = "#e4e4e7", bold = true }
+title_error = { fg = "#fafafa", bold = true }
+icon_info = ""
+icon_warn = ""
+icon_error = ""
+
+[pick]
+border = { fg = "#52525b" }
+active = { fg = "#09090b", bg = "#fafafa", bold = true }
+inactive = { fg = "#d4d4d8" }
+
+[input]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa" }
+value = { fg = "#d4d4d8" }
+selected = { fg = "#09090b", bg = "#fafafa" }
+
+[cmp]
+border = { fg = "#52525b" }
+active = { fg = "#09090b", bg = "#fafafa" }
+inactive = { fg = "#d4d4d8" }
+icon_file = ""
+icon_folder = ""
+icon_command = ""
+
+[tasks]
+border = { fg = "#52525b" }
+title = { fg = "#fafafa" }
+hovered = { fg = "#fafafa", bg = "#27272a", underline = true }
+
+[help]
+on = { fg = "#fafafa", bold = true }
+run = { fg = "#d4d4d8" }
+desc = { fg = "#a1a1aa" }
+hovered = { fg = "#09090b", bg = "#fafafa", bold = true }
+footer = { fg = "#09090b", bg = "#d4d4d8" }
+
+[filetype]
+rules = [
+    { name = "*", is = "orphan", fg = "#fafafa", bg = "#52525b", bold = true },
+    { name = "*", is = "dummy", fg = "#fafafa", bg = "#52525b" },
+    { name = "*/", is = "dummy", fg = "#fafafa", bg = "#52525b" },
+    { name = "*/", fg = "#fafafa", bold = true },
+    { name = "*", is = "exec", fg = "#e4e4e7", bold = true },
+    { mime = "image/*", fg = "#d4d4d8" },
+    { mime = "{audio,video}/*", fg = "#a1a1aa" },
+    { mime = "application/{zip,rar,7z*,tar,gzip,xz,zstd,bzip*,lzma,compress,archive,cpio,arj,xar,ms-cab*}", fg = "#a1a1aa" },
+    { name = "*", fg = "#d4d4d8" },
+]
+
+# No icons before file and directory names.
+[icon]
+globs = []
+dirs = []
+files = []
+exts = []
+conds = []

@@ -9,6 +9,8 @@ import tempfile
 import time
 
 base = Path.home()
+repo = Path(__file__).resolve().parents[2]
+target = Path(os.environ.get('CARGO_TARGET_DIR', base / '.cache/anyrun-build'))
 preview = base / '.local/state/anyrun/previews/calculator-field'
 preview.mkdir(parents=True, exist_ok=True)
 
@@ -24,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='anyrun-calculator-ui-') as temporary:
     hide_icons: true, hide_plugin_info: true,
     ignore_exclusive_zones: true, close_on_click: true,
     show_results_immediately: true, max_entries: Some(6),
-    provider: "{base}/.cache/anyrun-prefix-build/release/anyrun-provider",
+    provider: "{base}/.local/libexec/anyrun-prefix-provider",
     plugins: ["{base}/.config/anyrun/plugins/librink.so"],
 )''')
     (config / 'rink.ron').write_text('Config(prefix: "=", pull_currencies: false)\n')
@@ -54,9 +56,11 @@ with tempfile.TemporaryDirectory(prefix='anyrun-calculator-ui-') as temporary:
                 time.sleep(0.05)
             environment.update(SWAYSOCK=str(sockets[0]), WAYLAND_DISPLAY=wayland[0].name)
             command = ['cargo', 'test', '--offline', '--locked', '--release', '--manifest-path',
-                       str(base / '.local/src/anyrun/Cargo.toml'), '--package', 'anyrun', '--target-dir',
-                       str(base / '.cache/anyrun-prefix-build'), 'calculator_ui_flow', '--', '--ignored',
+                       str(repo / 'anyrun/Cargo.toml'), '--package', 'anyrun', '--target-dir',
+                       str(target), 'calculator_ui_flow', '--', '--ignored',
                        '--nocapture', '--test-threads=1']
+            if binary := os.environ.get('ANYRUN_TEST_BINARY'):
+                command = [binary, 'calculator_ui_flow', '--ignored', '--nocapture', '--test-threads=1']
             subprocess.run(command, env=environment, check=True, timeout=60)
             print(f'Interface e bordas verificadas. Prévias: {preview}')
         finally:

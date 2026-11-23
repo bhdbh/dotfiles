@@ -1,0 +1,17 @@
+[Unit]
+BindsTo=sway-session.service
+PartOf=sway-session.service
+After=sway-session.service
+Description=Anyrun launcher for Sway
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=%h/.local/bin/anyrun daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=GSK_RENDERER=cairo
+Environment=GSK_DEBUG=full-redraw
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5

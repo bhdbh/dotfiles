@@ -27,7 +27,7 @@ let
   version = cargoToml.package.version;
 
   fs = lib.fileset;
-  s = ../..;
+  s = ../../..;
 in
 rustPlatform.buildRustPackage {
   inherit pname version;
@@ -36,11 +36,9 @@ rustPlatform.buildRustPackage {
     root = s;
     fileset = fs.unions [
       (s + /anyrun)
-      (s + /anyrun-macros)
-      (s + /anyrun-plugin)
-      (s + /plugins)
-      (s + /Cargo.toml)
-      (s + /Cargo.lock)
+      (s + /anyrun-prefix-provider)
+      (s + /kidex)
+
     ];
   };
 
@@ -74,7 +72,8 @@ rustPlatform.buildRustPackage {
 
   copyLibs = true;
 
-  buildAndTestSubdir = if dontBuildPlugins then pname else null;
+  cargoRoot = "anyrun";
+  cargoTestFlags = if dontBuildPlugins then [ "-p ${pname}" ] else [ ];
 
   CARGO_BUILD_INCREMENTAL = "false";
   RUST_BACKTRACE = "full";

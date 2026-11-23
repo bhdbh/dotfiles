@@ -1,4 +1,1 @@
-Config(
-    prefix: "=",
-    pull_currencies: true,
-)
+../../anyrun/config/rink.ron

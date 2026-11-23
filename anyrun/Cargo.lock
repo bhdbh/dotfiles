@@ -200,6 +200,7 @@ dependencies = [
  "fuzzy-matcher",
  "ron 0.8.1",
  "serde",
+ "shlex",
  "sublime_fuzzy",
 ]
 
@@ -1667,9 +1668,8 @@ dependencies = [
 [[package]]
 name = "kidex-common"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9d161d39ea0b3247a56831cc370e0187f7ab587d43a1efa843ccc314a97e539"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
 ]

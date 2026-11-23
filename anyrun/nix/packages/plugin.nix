@@ -26,9 +26,14 @@ in
 rustPlatform.buildRustPackage {
   inherit pname version;
 
-  src = builtins.path {
-    path = lib.sources.cleanSource inputs.self;
-    name = "${pname}-${version}";
+  # The maintained IPC and Kidex client crates live beside this workspace.
+  src = lib.fileset.toSource {
+    root = ../../..;
+    fileset = lib.fileset.unions [
+      ../../../anyrun
+      ../../../anyrun-prefix-provider
+      ../../../kidex
+    ];
   };
   cargoLock = {
     inherit lockFile;
@@ -60,7 +65,8 @@ rustPlatform.buildRustPackage {
 
   copyLibs = true;
   cargoBuildFlags = [ "-p ${name}" ];
-  buildAndTestSubdir = "plugins/${name}";
+  cargoRoot = "anyrun";
+  cargoTestFlags = [ "-p ${name}" ];
 
   CARGO_BUILD_INCREMENTAL = "false";
   RUST_BACKTRACE = "full";

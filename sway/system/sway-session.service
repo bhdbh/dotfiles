@@ -1,0 +1,12 @@
+[Unit]
+Description=Track the Sway graphical session
+BindsTo=graphical-session.target
+PartOf=graphical-session.target
+After=graphical-session.target
+Wants=sway-idle.service sway-outputs.service ibus-sway.service quickshell.service anyrun.service xdg-desktop-portal.service
+
+[Service]
+Type=exec
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=/usr/bin/swaymsg --socket ${SWAYSOCK} --monitor --type subscribe '["shutdown"]'
+Slice=session.slice

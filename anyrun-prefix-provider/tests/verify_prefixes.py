@@ -325,7 +325,7 @@ def main():
                 selected = query(": History confirm")["Actions"][0]
                 assert handle("Actions", selected) == {"Refresh": True}
                 assert history() == []
-                cancel = next(item for item in query(": History confirm")["Actions"] if item["title"] == "Cancel")
+                cancel = next(item for item in query(": History confirm")["Actions"] if item["title"] == "Back")
                 assert handle("Actions", cancel) == {"Refresh": False}
                 assert history() == []
                 assert not (root / "confirmed").exists()
@@ -334,7 +334,7 @@ def main():
                 # Finish a harmless fixture action, then ensure replay still asks for confirmation.
                 selected = query(": History confirm")["Actions"][0]
                 assert handle("Actions", selected) == {"Refresh": True}
-                confirmation = next(item for item in query(": History confirm")["Actions"] if item["title"] != "Cancel")
+                confirmation = next(item for item in query(": History confirm")["Actions"] if item["title"] == "Confirm")
                 assert handle("Actions", confirmation) == "Close"
                 assert (root / "confirmed").exists()
                 assert history()[0]["selection"]["title"] == "History confirm"
@@ -345,7 +345,7 @@ def main():
                 send({"Replay": {"index": 0}})
                 assert receive()["Handled"]["result"] == {"Refresh": True}
                 assert not (root / "confirmed").exists()
-                cancel = next(item for item in query(": History confirm")["Actions"] if item["title"] == "Cancel")
+                cancel = next(item for item in query(": History confirm")["Actions"] if item["title"] == "Back")
                 assert handle("Actions", cancel) == {"Refresh": False}
                 checks += 1
 

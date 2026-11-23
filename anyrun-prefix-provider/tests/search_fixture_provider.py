@@ -43,6 +43,11 @@ with socket.socket(socket.AF_UNIX) as connection:
                 sys.exit(0)
             if request == "History":
                 send({"History": {"entries": [{"plugin": plugins[0], "selection": item("History seed"), "query": "seed"}]}})
+            elif isinstance(request, dict) and "Replay" in request:
+                assert request["Replay"]["index"] == 0
+                serial += 1
+                heapq.heappush(scheduled, (time.monotonic() + 0.25, serial,
+                    {"Handled": {"plugin": plugins[0], "result": "Close"}}))
             elif isinstance(request, dict) and "Query" in request:
                 text = request["Query"]["text"]
                 for index, plugin in enumerate(plugins):

@@ -1,0 +1,11 @@
+[Unit]
+Description=Kidex file indexer for Anyrun
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/kidex
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

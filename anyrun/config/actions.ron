@@ -1,0 +1,33 @@
+Config(
+    enable_power_actions: false,
+    custom_actions: [
+        (
+            title: "Suspend",
+            command: "\"${XDG_CONFIG_HOME:-$HOME/.config}/sway/scripts/lock.sh\" suspend",
+            description: "Lock and suspend",
+            icon: "system-suspend",
+            confirm: true,
+        ),
+        (
+            title: "Log out",
+            command: "systemctl --user start --no-block sway-logout.service",
+            description: "End session",
+            icon: "system-log-out",
+            confirm: true,
+        ),
+        (
+            title: "Reboot",
+            command: "systemctl reboot",
+            description: "Restart",
+            icon: "system-reboot",
+            confirm: true,
+        ),
+        (
+            title: "Shutdown",
+            command: "systemctl poweroff",
+            description: "Power off",
+            icon: "system-shutdown",
+            confirm: true,
+        ),
+    ],
+)

@@ -1,0 +1,15 @@
+[Unit]
+BindsTo=sway-session.service
+PartOf=sway-session.service
+After=sway-session.service
+Description=Sway idle policy for mains and battery power
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=/usr/bin/python3 %E/sway/scripts/idle.py --watch
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=8

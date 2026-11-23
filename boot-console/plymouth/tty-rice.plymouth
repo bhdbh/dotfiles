@@ -1,0 +1,9 @@
+[Plymouth Theme]
+Name=TTY Rice
+Description=Kernel-console style disk password prompt
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/tty-rice
+ScriptFile=/usr/share/plymouth/themes/tty-rice/tty-rice.script
+MonospaceFont=DejaVu Sans Mono

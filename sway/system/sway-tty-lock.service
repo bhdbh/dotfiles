@@ -1,0 +1,13 @@
+[Unit]
+Description=Password authentication on a locked Linux virtual console
+
+[Service]
+Type=notify
+NotifyAccess=main
+Environment=LANG=C LC_ALL=C
+EnvironmentFile=-/run/sway-tty-lock/environment
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
+ExecStartPre=/usr/bin/test -r /etc/shadow
+ExecStart=/usr/local/bin/physlock-sway -m -s $BLANK_OPTION
+TimeoutStartSec=2
+Restart=no

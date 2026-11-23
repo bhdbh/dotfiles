@@ -16,7 +16,7 @@ pub fn choose_monitor(monitors: &[MonitorIdentity], preferred: Option<&str>, fal
     preferred.and_then(|preferred| monitors.iter().position(|monitor| {
         // wlroots appends the connector to the hardware description. Match the
         // complete hardware identity, including serial, independently of port.
-        monitor.description.strip_suffix(&format!(" ({})", monitor.connector))
+        monitor.connector == preferred || monitor.description.strip_suffix(&format!(" ({})", monitor.connector))
             .unwrap_or(&monitor.description) == preferred
     })).or_else(|| fallback.and_then(|fallback| monitors.iter().position(|monitor| monitor.connector == fallback)))
         .or_else(|| monitors.iter().position(|monitor| ["eDP-", "LVDS-", "DSI-"].iter()
@@ -346,9 +346,15 @@ mod tests {
 
     #[test]
     fn reads_the_installed_preference_without_initializing_a_display() {
-        let config: Config = ron::from_str(include_str!("../../../home/.config/anyrun/config.ron")).unwrap();
+        let config: Config = ron::from_str(include_str!("../../config/config.ron")).unwrap();
         assert_eq!(config.preferred_monitor.as_deref(), Some("HDMI-A-1"));
         assert_eq!(config.fallback_monitor.as_deref(), Some("eDP-1"));
+        assert_eq!(choose_monitor(&[laptop(), hdmi("EXAMPLE000001")],
+            config.preferred_monitor.as_deref(), config.fallback_monitor.as_deref()), Some(1));
+        assert_eq!(choose_monitor(&[laptop()], config.preferred_monitor.as_deref(),
+            config.fallback_monitor.as_deref()), Some(0));
+        assert_eq!(choose_monitor(&[hdmi("EXAMPLE000001")], config.preferred_monitor.as_deref(),
+            config.fallback_monitor.as_deref()), Some(0));
     }
 
     #[test]
@@ -478,7 +484,7 @@ mod tests {
         let root = gtk::Window::new();
         root.init_layer_shell();
         let mut screens = Screens::new(&display, sender);
-        let mut config: Config = ron::from_str(include_str!("../../../home/.config/anyrun/config.ron")).unwrap();
+        let mut config: Config = ron::from_str(include_str!("../../config/config.ron")).unwrap();
         let chosen = screens.sync(&root, &config).unwrap();
         assert_eq!(root.monitor().as_ref(), Some(&chosen));
         assert!(!root.is_visible() && !root.is_mapped());

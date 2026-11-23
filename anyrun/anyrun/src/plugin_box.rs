@@ -150,6 +150,8 @@ impl FactoryComponent for PluginMatch {
         let prefix = match plugin.name.as_str() {
             "Applications" => ">",
             "Shell" => "$",
+            // Confirm and Back use the Actions plugin's two reserved response IDs.
+            "Actions" if matches!(content.id, ROption::RSome(id) if id >= u64::MAX - 1) => "",
             "Actions" => ":",
             "Rink" => "",
             "Kidex" => match &content.icon {

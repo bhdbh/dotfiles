@@ -1,0 +1,496 @@
+{
+  "website": "https://pixelarticons.com/free/svg-cursors/",
+  "base_url": "https://pixelarticons.com/free/cursors/",
+  "author": "Gerrit Halfmann (Halfmage)",
+  "downloaded": "2026-11-16",
+  "files": {
+    "col-resize.png": "9b2d6dcdad3f49565b5126ce9b8b8c61644c1be9a04392503ee7f304f6649b30",
+    "col-resize.svg": "2670e3a0ff6ad984df5911bd7bb5679adf4fcb86653ecbb81366a345efe673f6",
+    "copy-dark.png": "4935e8a80f7037814cc7545acf533a88ac6c3224266e3019aab1d2634a3fb965",
+    "copy-dark.svg": "499171c045e2e899864664fb337bab5fe46b92aa425f57c538a25f07edbf40d1",
+    "copy.png": "f8f738ee8ebd07e787a199b4ff1448d9d6741b88b9a90ac5ba17f679ed1dc9ae",
+    "copy.svg": "974d087108d1a2508918baa84c62b13c841334811a46a569fb2c4d2320e6777d",
+    "crosshair.png": "b32732cbfcbc186e565a930fa32297436f517f5b9b972087710f3c443f98905c",
+    "crosshair.svg": "59e3a20158d170c517b5283c1b076abe62dbd89e4c198d9b9e73904504cf5fbd",
+    "default-alt-dark.png": "380c7bd9952900c166350aedac99a7dba0158f0a1ce422898ddb5e5474458dbd",
+    "default-alt-dark.svg": "9e40168ac29c4df4e5eb602ca07e2b444c8042c29b01495ddfbc1401a9edc4e8",
+    "default-alt.png": "abaa5b1f2f37f8be63fee3b5651896b601a413a709956bf10f830d4b1ccadea9",
+    "default-alt.svg": "9075bb9a4f5fea6d4ffc08000a2984a5ed630a3e04918eabc16802054dd0747c",
+    "default-dark.png": "521c71e0812c9eb1a3ba207dbed1425b589f1034f153b1901b355c62bbfcfcbb",
+    "default-dark.svg": "49f6790d88e85f453fc26b9518f4761c4db87ba6631dc6c1032fd2ba2c1c3b07",
+    "default.png": "710d5c99b1f0d2b2e383f54022a47345648a3988df2a55e0304b89277832e104",
+    "default.svg": "0d9f53e07481d898c5a6c1259d59d4408be51af377815ed375f71389eb42906d",
+    "e-resize.png": "56dccf5f40fe35b66ae3d3c50eade9ac331b93ce57ed70e0111ab0b6c456f4ef",
+    "e-resize.svg": "ea86101008d8e27d704e93ef11568c7c040892b22938a4620b83f81f60f680a5",
+    "ew-resize.png": "35a9ee64050d440e0d4055f32f3b5f94ee3cdf903f477de159f1071a3d8cacc9",
+    "ew-resize.svg": "e66ac47ac7a210f456bb626711cf6705cdf1682d28099b86bdbe58d246a61aa4",
+    "grab-dark.png": "325857c86f21fc7b42bdb4e2bd6ee9fe8be87690edef12c92d0458b94077bdcd",
+    "grab-dark.svg": "9b09ad7a46afb48ac13acb871c39ba4e7b4294b31ac176733e9f19c53308845f",
+    "grab.png": "440fc673beedd7450c913741f09ad874e5daf902d5b067775f8a8a72c2783a8c",
+    "grab.svg": "782f1866288131a8f9202b8ad3866fb51d2f71a7f261b3665c4e48b47ba8d351",
+    "grabbing-dark.png": "1f62d5b01cb838bd3d1c337997b1fee4f3de5c5c3039b116920e2fe7eda04beb",
+    "grabbing-dark.svg": "a7c23ca9f64bd89f7548c12714f6c8a8e06fed461ccb37c51257beb7a8a239d6",
+    "grabbing.png": "77465d8055cf8f5ee18a1fd7fd173118fe82d33a63bc4a3e0efd7e7e25dbd3ef",
+    "grabbing.svg": "f1d399abeadc386fedf87359bda7d842aff35fa558362736209099b7a6afed73",
+    "hand-dark.png": "0d8503162ba44e5ac7e3dc9c064e8d5f371e0814014014fd63115baf74ffd99a",
+    "hand-dark.svg": "e91349d7726435f6808c40353b06fbf58dab9131c9da2b500c13570e9d8663e2",
+    "hand.png": "ba855051b4a9f82ce8fd7f92d8330b11052d83c805db7a51e1fee5943b796a03",
+    "hand.svg": "7bc35928d3264de7ef1da513701bfacbb24db3d7bcfa7b32591c0145324aa377",
+    "help-dark.png": "506fcddcfe12b530946ed6b747ff1f3b70654e2b4c9a430ee9daadfee5510eba",
+    "help-dark.svg": "c5dc111bc3422a0f2f19afe08198d566f4454c243324ee5ec2ca6032dff1d3c1",
+    "help.png": "8a057787b4a31c1ed303e93a4bc7cc1e4718fa8bbcbe618d8b820b10c9616742",
+    "help.svg": "0397e6a39279df4b218f6e251d6b4d67dd165d51bb6b7d50b4b785fd39e2f0ab",
+    "move.png": "585098af62830e2b98bf7287042dbece6fda8ce78d5b9bb4affda43d6cd72596",
+    "move.svg": "033a8c36c513590f40f6ac99194cce3a0d9ded6b6d4798409ac593ff9aa24b1d",
+    "n-resize.png": "e301883d97476b0a716d4941689b48d1f83dc8b208fb169668787c1294eafa75",
+    "n-resize.svg": "52d7e3b47527cc94c39ec6f4f202f010daa5e6b846987cf0762b5b746346ccda",
+    "ne-resize.png": "2e8421aff1e5f78f7efa0d7f055be6d00a7e5017ef5dcd6da686cf7f54308315",
+    "ne-resize.svg": "e2d8a883beae015a0ae10130b9e4763426dc03b9911f366f346b7d253a5ad054",
+    "nesw-resize.png": "f0322f1481a4d46d44138d4208bd51e0b72e18c621a07091d40cfd53f265ed4d",
+    "nesw-resize.svg": "dfd3c6ace799e45e5d89d01508f33e225302f7291084011068c22141a8249244",
+    "not-allowed-dark.png": "3d07513336769ccb144a4b63cd58fbce9ded6ce5f39b0e52ce0a9155babd294f",
+    "not-allowed-dark.svg": "f5e81b2ac19453043381684e7f521ee74dc866feb756b2c96a87a4c8bab44fe3",
+    "not-allowed.png": "aa02c6fc914193f71d78b7cb9b572974553055a81b910e9474459cd53d6388bc",
+    "not-allowed.svg": "4110b2521e173ca39b2d24f55030143cd99d0a6cdecd0d70b4025b1d647e314d",
+    "ns-resize.png": "b86fe3e79637934d91241c823cfd7e6c141f4cf91bc28614409e44e60d483be8",
+    "ns-resize.svg": "b53676888e62b1ad4c0956db5f59348a8de281f03172699c5df47c6d5c49caea",
+    "nw-resize.png": "845029408c460049cee8b98fb711d06ede8c5366f2d449afff81e3dfd5d16073",
+    "nw-resize.svg": "194ac2c9945799b12e04bd9d741cdeaaebbf94852432cc5524eae6704c68f25e",
+    "nwse-resize.png": "a15870855d431e111607288325345bc8e569bba40d8d36f85d6d20b468543b0c",
+    "nwse-resize.svg": "80cf767fa7aa62b1561c3dbb45641f2120be5cfec415448beb713792a27b459c",
+    "pointer-dark.png": "279e8ef72d77d3fc65d2c014e33224a746fe4de1db9ffc3e39ea26d5afa04df2",
+    "pointer-dark.svg": "dbdfa136718f30705726fec0f4c3d4ca299ce5c99e3d976321e90d997c796f07",
+    "pointer.png": "a4973ee1e090a4d1b1ddbed6bb6874d12bc59ee807f14b47c5a71265f477531b",
+    "pointer.svg": "d54d685a44fca8b983175beb6b45dc2798fedcb39e66245844b5dcda20f33e3a",
+    "resize-down.png": "8796c00b721ddfa15afab840c2dcc3d2d021bc21d2b7928ef2406636ba662d77",
+    "resize-down.svg": "e760a9c27201418e912c7518e53583302b0c41e522e047a28156b32e081dab52",
+    "resize-left.png": "42e6683e1994d000e82ab57722908a33a0497cb5dea18756ab77e722dcfbe4b6",
+    "resize-left.svg": "41f8cae0313253a20c1bff1250ade96cca79765ad89515dcabb0b977c43b6334",
+    "resize-right.png": "feba5abb362360161fcfc27808d2a1ebe64c4cc963cf3b5eb2db6b3d7f87a30b",
+    "resize-right.svg": "5732d842e1d986ddb117e5fb030be62da459a05d23f1d10398b1deb88f005c03",
+    "resize-up.png": "e16ece4ed0b2219092986912df4bd6281218cd2b015c6291d282f08ddabdc339",
+    "resize-up.svg": "509470fcb08b9b1a45fa1b6ddda26d38377a9bf9df62c58cde25915bde2de825",
+    "rotate-bottom-left.png": "8f105b193dfff18ad7732b060912455f8a70c1a168dff627aa8486d18b8131bf",
+    "rotate-bottom-left.svg": "48aa9b11f12e7f43ec9e93332967e8459b1b1945580f2bf6654103e8f3f9900e",
+    "rotate-bottom-right.png": "c67fe56cd7a76987b3e7e21e940db842bd490b55873a477ef6d5282696694e16",
+    "rotate-bottom-right.svg": "e5d376f08c4e45edcc52e25d3b9b78ea838bc9601cf485ae85b5db70ea0ebda0",
+    "rotate-top-left.png": "9ba9c55fb07229f15138e3ed1c72b15406245e9d78ddf6c940c802642b01d91f",
+    "rotate-top-left.svg": "e1df3562cbbdd9a204f7e05ced6c55c6547f6ae042d913e396ef107da6669285",
+    "rotate-top-right.png": "6bd1cb6806f8191f54a9c41126098f3960f5eea35b6db3db79836078b9f96a5c",
+    "rotate-top-right.svg": "0046b797701d1e01df50ac6cd0077a83f9366790688ae2a875838cb238b62401",
+    "row-resize.png": "44a07e9f0dc52c9d43ea2f964837d23b5ce4540237eed7fd7d7ad322e2da7ee4",
+    "row-resize.svg": "c91191570669b42730cfbfa7cbe7484cb93fcc8c14f9a1c7e75fe79720a0d890",
+    "s-resize.png": "2e48b02e5eff734759f28f42a389ecf3d0286cb4dd879a2a465453ccf7f9deb8",
+    "s-resize.svg": "e13872bc45feb440a051aebb8f1d46dd5defd255826f46bc3f1d703ba2aff9a1",
+    "screenshot-dark.png": "237c5094932561acbc4fb5cb4c8b8599c079789c8f38a251d0542502df658af0",
+    "screenshot-dark.svg": "9364e2371d2c8afe7ea53a01ebdf9ea25808e2a7aad803d04cd7210e5d50d60c",
+    "screenshot.png": "2bdd8b5b5573dfdeefab83cd2e46487237a8571ea3df49cd97aa6698f52c2eb1",
+    "screenshot.svg": "0135f45282282362fd189eaa1ce9f90fd93ff9116e3944600b446582cc95445d",
+    "se-resize.png": "9925d45ad72abccad6c103e6e8a9f69182cedf5aec6b9d2a47ec7346e92e6005",
+    "se-resize.svg": "27107720c03bd9b42de8a02a330a0d186aa2724439c354ae24a287cee5bb663a",
+    "sw-resize.png": "4e2e25a28fcb5d535b31049fbc19b3d8abc192137389179c7ea3efe6dedeb634",
+    "sw-resize.svg": "2254b5d0d15131e8b4a48ae52eed3c47a053d23719365f807c7327c13a8d8ca8",
+    "text.png": "f5516d89049871a1ce4787d83d82b13daa7e232a8343370592472a06fe8b1a1c",
+    "text.svg": "3b278eaaa22b7c544c4097362e059d5c9ec4b0a7683d5bbf3d3706e23f9ad06e",
+    "w-resize.png": "fe28ed336230d24d2813c8592152a4c80554862965d11379310d008934b8e189",
+    "w-resize.svg": "ffafb7152512f4030c0a20858174804b854fa4e9506590ac8f930bacc2e281ee",
+    "wait-dark.png": "32d3bbe47790206d53c5619460e47c356d5e43ce1f5267b59454003dae81e1dd",
+    "wait-dark.svg": "b877dd3fed0c2c03f20b849fc725ea9b8ada441c067e90e2a5578185300f82af",
+    "wait.png": "34d4bf8e2b937856440c0231088abf7323e7bfacf4cd2f69d5096b465933f9da",
+    "wait.svg": "8ecbf06f8680acfa3fa1e1f62de66c4c819d8605066be661bcf6cdcd251a4d86",
+    "zoom-in-dark.png": "db7f98f1e30f9ed963aed4eb6c381f81168478e3b08dd6401facdfb38e3e5566",
+    "zoom-in-dark.svg": "e51747b5b8680a6bd12b826dddf42da7e84ff3c142d592d787763a16ead18254",
+    "zoom-in.png": "46fdca59464359a7bf8f091bb916861c04a1dd691978f112870e2f823354743b",
+    "zoom-in.svg": "e893178a628bb7c189de48a0c7b323efa2a13cb01aa950804b7516068a7caf71",
+    "zoom-out-dark.png": "2b246c56aa41df062924b59873b8e6925cd04b6b8b2ab9e2d90ec6685a0e623c",
+    "zoom-out-dark.svg": "65728d3de36ee0f56805143bbd86c8dccfa4c0e79c95c14a3f961c0e64411872",
+    "zoom-out.png": "dfb281650e4377c27c32c516420b7364c538a8441441a06f853ce638107dc41d",
+    "zoom-out.svg": "3f13fdf89d897ab5800ed19be588aedd1e0374fdeb03dc4a8b46fe924803eb28"
+  },
+  "cursors": {
+    "col-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "split_h",
+        "split-h",
+        "14fef782d02440884392942c11205230"
+      ]
+    },
+    "copy": {
+      "hotspot": [
+        4,
+        5
+      ],
+      "aliases": [
+        "dnd-copy",
+        "1081e37283d90000800003c07f3ef6bf",
+        "6407b0e94181790501fd1e167b474872",
+        "b66166c04f8c3109214a4fbd64a50fc8"
+      ]
+    },
+    "crosshair": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "cross",
+        "cross_reverse",
+        "diamond_cross",
+        "tcross",
+        "cell",
+        "plus"
+      ]
+    },
+    "default": {
+      "hotspot": [
+        6,
+        4
+      ],
+      "aliases": [
+        "left_ptr",
+        "arrow",
+        "top_left_arrow"
+      ]
+    },
+    "default-alt": {
+      "hotspot": [
+        6,
+        5
+      ],
+      "aliases": []
+    },
+    "e-resize": {
+      "hotspot": [
+        27,
+        16
+      ],
+      "aliases": [
+        "right_side"
+      ]
+    },
+    "ew-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "sb_h_double_arrow",
+        "h_double_arrow",
+        "size_hor",
+        "028006030e0e7ebffc7f7070c0600140"
+      ]
+    },
+    "grab": {
+      "hotspot": [
+        16,
+        14
+      ],
+      "aliases": [
+        "hand1",
+        "openhand"
+      ]
+    },
+    "grabbing": {
+      "hotspot": [
+        16,
+        18
+      ],
+      "aliases": [
+        "closedhand",
+        "dnd-move",
+        "dnd-none",
+        "fcf21c00b30f7e3f83fe0dfd12e71cff"
+      ]
+    },
+    "hand": {
+      "hotspot": [
+        12,
+        4
+      ],
+      "aliases": []
+    },
+    "help": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "question_arrow",
+        "whats_this",
+        "left_ptr_help",
+        "d9ce0ab605698f320427677b458ad60b",
+        "5c6cd98b3f3ebcb1f9c7f1c204630408"
+      ]
+    },
+    "move": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "fleur",
+        "all-scroll",
+        "size_all",
+        "4498f0e0c1937ffe01fd06f973665830",
+        "9081237383d90e509aa00f00170e968f"
+      ]
+    },
+    "n-resize": {
+      "hotspot": [
+        16,
+        4
+      ],
+      "aliases": [
+        "top_side"
+      ]
+    },
+    "ne-resize": {
+      "hotspot": [
+        24,
+        6
+      ],
+      "aliases": [
+        "top_right_corner",
+        "ur_angle"
+      ]
+    },
+    "nesw-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "fd_double_arrow",
+        "size_bdiag",
+        "fcf1c3c7cd4491d801f1e1c78f100000"
+      ]
+    },
+    "not-allowed": {
+      "hotspot": [
+        4,
+        5
+      ],
+      "aliases": [
+        "crossed_circle",
+        "circle",
+        "forbidden",
+        "no-drop",
+        "dnd_no_drop",
+        "03b6e0fcb3499374a867c041f52298f0"
+      ]
+    },
+    "ns-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "sb_v_double_arrow",
+        "v_double_arrow",
+        "size_ver",
+        "00008160000006810000408080010102"
+      ]
+    },
+    "nw-resize": {
+      "hotspot": [
+        6,
+        6
+      ],
+      "aliases": [
+        "top_left_corner",
+        "ul_angle"
+      ]
+    },
+    "nwse-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "bd_double_arrow",
+        "size_fdiag",
+        "c7088f0f3e6c8088236ef8e1e3e70000"
+      ]
+    },
+    "pointer": {
+      "hotspot": [
+        12,
+        4
+      ],
+      "aliases": [
+        "hand2",
+        "pointing_hand",
+        "9d800788f1b08800ae810202380a0822",
+        "e29285e634086352946a0e7090d73106"
+      ]
+    },
+    "resize-down": {
+      "hotspot": [
+        16,
+        26
+      ],
+      "aliases": [
+        "down_arrow",
+        "bottom_tee"
+      ]
+    },
+    "resize-left": {
+      "hotspot": [
+        4,
+        16
+      ],
+      "aliases": [
+        "left_tee"
+      ]
+    },
+    "resize-right": {
+      "hotspot": [
+        26,
+        16
+      ],
+      "aliases": [
+        "right_tee"
+      ]
+    },
+    "resize-up": {
+      "hotspot": [
+        16,
+        4
+      ],
+      "aliases": [
+        "up_arrow",
+        "top_tee"
+      ]
+    },
+    "rotate-bottom-left": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": []
+    },
+    "rotate-bottom-right": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": []
+    },
+    "rotate-top-left": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": []
+    },
+    "rotate-top-right": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": []
+    },
+    "row-resize": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "split_v",
+        "split-v",
+        "2870a09082c103050810ffdffffe0204"
+      ]
+    },
+    "s-resize": {
+      "hotspot": [
+        16,
+        27
+      ],
+      "aliases": [
+        "bottom_side"
+      ]
+    },
+    "screenshot": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": []
+    },
+    "se-resize": {
+      "hotspot": [
+        24,
+        24
+      ],
+      "aliases": [
+        "bottom_right_corner",
+        "lr_angle"
+      ]
+    },
+    "sw-resize": {
+      "hotspot": [
+        6,
+        24
+      ],
+      "aliases": [
+        "bottom_left_corner",
+        "ll_angle"
+      ]
+    },
+    "text": {
+      "hotspot": [
+        16,
+        16
+      ],
+      "aliases": [
+        "xterm",
+        "ibeam"
+      ]
+    },
+    "w-resize": {
+      "hotspot": [
+        4,
+        16
+      ],
+      "aliases": [
+        "left_side"
+      ]
+    },
+    "wait": {
+      "hotspot": [
+        4,
+        5
+      ],
+      "aliases": [
+        "watch",
+        "left_ptr_watch",
+        "progress",
+        "00000000000000020006000e7e9ffc3f",
+        "08e8e1c95fe2fc01f976f1e063a24ccd",
+        "3ecb610c1bf2410f44200f48c40d3599"
+      ]
+    },
+    "zoom-in": {
+      "hotspot": [
+        14,
+        14
+      ],
+      "aliases": [
+        "zoom_in"
+      ]
+    },
+    "zoom-out": {
+      "hotspot": [
+        14,
+        14
+      ],
+      "aliases": [
+        "zoom_out"
+      ]
+    }
+  }
+}

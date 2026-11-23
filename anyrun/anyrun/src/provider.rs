@@ -81,6 +81,8 @@ pub fn worker(
                         if matches!(req, ipc::Request::Quit) {
                             break;
                         }
+                        } else {
+                            break;
                         }
                     }
                     res = socket.recv() => {
@@ -95,6 +97,8 @@ pub fn worker(
                 }
             }
 
+            // Let the provider observe EOF before waiting for it to exit.
+            drop(socket);
             // Remove it after we are done with it
             let _ = fs::remove_file(&socket_path);
             // Make sure it exits properly and doesn't leave a zombie process

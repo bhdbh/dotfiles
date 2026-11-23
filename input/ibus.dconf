@@ -1,0 +1,9 @@
+[general]
+preload-engines=['xkb:us:intl:eng', 'xkb:br::por']
+engines-order=['xkb:us:intl:eng', 'xkb:br::por']
+use-system-keyboard-layout=false
+use-global-engine=true
+use-xmodmap=false
+
+[general/hotkey]
+triggers=['<Super>space']

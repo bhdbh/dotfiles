@@ -1,0 +1,6 @@
+// Override only US International; inherit the distribution's other mappings.
+partial alphanumeric_keys
+xkb_symbols "intl" {
+    include "%S/us(intl)"
+    key <AC11> { [ dead_acute, quotedbl, apostrophe, dead_diaeresis ] };
+};

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::fs;
 
 mod everyday;
+mod currency_cache;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -47,20 +48,11 @@ fn init(config_dir: RString) -> State {
 
     let mut ctx = rink_core::simple_context().unwrap();
 
-    let live_data = if config.pull_currencies {
-        match reqwest::blocking::get("https://rinkcalc.app/data/currency.json") {
-            // The error will just be handled further down the line
-            Ok(response) => Some(response.text().unwrap_or_default()),
-            Err(why) => {
-                eprintln!("[rink] Error fetching up-to-date currency conversions: {why:?}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     let base_currencies = rink_core::CURRENCY_FILE.unwrap();
+    let live_data = if config.pull_currencies {
+        currency_cache::load(|data| rink_core::simple_context()
+            .is_ok_and(|mut validation| validation.load_currency(Some(data), base_currencies).is_ok()))
+    } else { None };
     if let Err(why) = ctx.load_currency(live_data.as_deref(), base_currencies) {
         eprintln!("[rink] Error loading currencies: {why}, retrying with static currency data");
         if let Err(why) = ctx.load_currency(None, base_currencies) {

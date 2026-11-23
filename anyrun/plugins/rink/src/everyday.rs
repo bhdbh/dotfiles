@@ -1,8 +1,9 @@
 use rink_core::{
-    ast::Query,
+    ast::{Conversion, Expr, Function, Query},
     output::{Digits, NumberParts, QueryReply},
-    types::{BigInt, Numeric},
-    Context,
+    parsing::text_query::{parse_query, TokenIterator},
+    types::{BigInt, DateTime, Numeric},
+    Context, Value,
 };
 
 // Keep results useful in a single text field, including when reused in a calculation.
@@ -12,12 +13,24 @@ pub(super) fn calculate(
     ctx: &mut Context,
     input: &str,
 ) -> Result<(String, Option<String>), String> {
+    ctx.set_time(DateTime::now());
+    let mut tokens = TokenIterator::new(input.trim()).peekable();
+    let mut query = parse_query(&mut tokens);
+    normalize_functions(&mut query);
     // An explicitly requested fraction, base or precision still takes precedence.
     let explicit_format = matches!(
-        rink_core::reformat(ctx, input),
-        Query::Convert(_, _, base, digits) if base.is_some() || digits != Digits::Default
+        &query,
+        Query::Convert(_, _, base, digits) if base.is_some() || digits != &Digits::Default
     );
-    let reply = rink_core::eval(ctx, input).map_err(|error| error.to_string())?;
+    let reply = ctx.eval_query(&query).map_err(|error| error.to_string())?;
+    // Preserve Rink's native `ans` behavior when evaluating the normalized AST.
+    if ctx.save_previous_result {
+        if let QueryReply::Number(parts) = &reply {
+            if let Some(raw) = &parts.raw_value {
+                ctx.previous_result = Some(Value::Number(raw.clone()));
+            }
+        }
+    }
     let result = if explicit_format {
         return Ok(super::parse_result(reply.to_string()));
     } else {
@@ -37,6 +50,38 @@ pub(super) fn calculate(
         }
     };
     Ok((result, None))
+}
+
+fn normalize_functions(query: &mut Query) {
+    match query {
+        Query::Expr(expr) | Query::Factorize(expr) | Query::UnitsFor(expr) => normalize_expression(expr),
+        Query::Convert(expr, conversion, _, _) => {
+            normalize_expression(expr);
+            if let Conversion::Expr(expr) = conversion { normalize_expression(expr); }
+        }
+        _ => (),
+    }
+}
+
+fn normalize_expression(expr: &mut Expr) {
+    match expr {
+        Expr::Call { func, args } => {
+            for arg in args.iter_mut() { normalize_expression(arg); }
+            // Scientific calculators use log(x) for base 10, and ln(x) for base e.
+            // Keep Rink's log(x, base) available and all other functions intact.
+            if *func == Function::Log && args.len() == 1 { *func = Function::Log10; }
+        }
+        Expr::BinOp(op) => {
+            normalize_expression(&mut op.left);
+            normalize_expression(&mut op.right);
+        }
+        Expr::UnaryOp(op) => normalize_expression(&mut op.expr),
+        Expr::Mul { exprs } => {
+            for expr in exprs { normalize_expression(expr); }
+        }
+        Expr::Of { expr, .. } => normalize_expression(expr),
+        _ => (),
+    }
 }
 
 fn number(ctx: &Context, mut parts: NumberParts, prettify: bool) -> String {
@@ -122,6 +167,34 @@ mod tests {
         ] {
             assert_eq!(calculate(&mut ctx, input).unwrap(), (expected.into(), None), "{input}");
         }
+    }
+
+    #[test]
+    fn everyday_functions_keep_familiar_syntax_and_simple_results() {
+        let mut ctx = rink_core::simple_context().unwrap();
+        for (input, expected) in [
+            ("3/2", "1.5"),
+            ("log(2)", "0.30103"), ("log(100)", "2"),
+            ("log(8, 2)", "3"), ("log(27, 3)", "3"),
+            ("log2(8)", "3"), ("log10(1000)", "3"),
+            ("ln(2)", "0.693147"), ("exp(1)", "2.718282"),
+            ("sqrt(log(10000))", "2"), ("log(log(100))", "0.30103"),
+            ("10^log(123)", "123"), ("log(100) + log(8, 2)", "5"),
+            ("sin(90 deg)", "1"), ("cos(180 deg)", "-1"),
+            ("tan(45 deg)", "1"), ("asin(1) to deg", "90 degree"),
+            ("hypot(3, 4)", "5"), ("fac(5)", "120"),
+            ("0.123456789012 + log(1)", "0.123457"),
+        ] {
+            assert_eq!(calculate(&mut ctx, input).unwrap(), (expected.into(), None), "{input}");
+        }
+        let expected = super::super::parse_result(rink_core::one_line(&mut ctx, "log10(2) to digits 10").unwrap());
+        assert_eq!(calculate(&mut ctx, "log(2) to digits 10").unwrap(), expected);
+        for input in ["log()", "log(1, 2, 3)", "log(2, 3 meter)", "sqrt(2+"] {
+            assert!(calculate(&mut ctx, input).is_err(), "{input}");
+        }
+        ctx.save_previous_result = true;
+        calculate(&mut ctx, "log(100)").unwrap();
+        assert_eq!(calculate(&mut ctx, "ans + 3").unwrap().0, "5");
     }
 
     #[test]

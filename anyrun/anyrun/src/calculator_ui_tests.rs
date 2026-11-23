@@ -64,7 +64,7 @@ fn calculator_ui_flow() {
     pump_for(300);
     assert!(!main.has_css_class("has-results"));
     assert_eq!(entry.style_context().border().bottom(), 0);
-    assert_eq!(main.style_context().border().bottom(), 2);
+    assert_eq!(main.style_context().border().bottom(), 3);
     snapshot("empty-border.png");
 
     entry.set_text("=2+2");
@@ -75,7 +75,7 @@ fn calculator_ui_flow() {
     assert!(window.is_visible());
     assert_eq!(entry.position(), 2);
     assert!(entry.has_css_class("calculated"));
-    assert_eq!(entry.style_context().border().bottom(), 2);
+    assert_eq!(entry.style_context().border().bottom(), 3);
     enter();
     pump_for(150);
     assert_eq!(labels(main.upcast_ref()).iter().filter(|l| l.has_css_class("calculation-operation")).count(), 1);
@@ -96,7 +96,7 @@ fn calculator_ui_flow() {
     let operation_labels: Vec<_> = labels(main.upcast_ref()).into_iter().filter(|l| l.has_css_class("calculation-operation")).collect();
     assert_eq!(operation_labels[0].text(), "4*3");
     assert_eq!(operation_labels[1].text(), "2+2");
-    assert_eq!(operation_labels[0].pango_context().font_description().unwrap().size(), 16 * gtk::pango::SCALE);
+    assert_eq!(operation_labels[0].pango_context().font_description().unwrap().size(), 15 * gtk::pango::SCALE);
     snapshot("calculator-history.png");
     enter();
     pump_until(|| entry.text() == "=12");

@@ -1,10 +1,11 @@
-use std::{collections::HashMap, env, ffi::OsStr, fs, path::PathBuf};
+use std::{collections::{HashMap, HashSet}, env, ffi::OsStr, fs, path::PathBuf};
 
 use crate::Config;
 
 #[derive(Clone, Debug)]
 pub struct DesktopEntry {
     pub exec: String,
+    pub desktop_file: PathBuf,
     pub path: Option<PathBuf>,
     pub name: String,
     pub localized_name: Option<String>,
@@ -17,9 +18,6 @@ pub struct DesktopEntry {
     pub is_action: bool,
 }
 
-const FIELD_CODE_LIST: &[&str] = &[
-    "%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v", "%m",
-];
 
 impl DesktopEntry {
     pub fn localized_name(&self) -> String {
@@ -74,21 +72,11 @@ impl DesktopEntry {
                         }
                     }
 
-                    if map.get("Type")? == &"Application"
-                        && match map.get("NoDisplay") {
-                            Some(no_display) => !no_display.parse::<bool>().unwrap_or(true),
-                            None => true,
-                        }
+                    if map.get("Type")? == &"Application" && visible(&map)
                     {
                         Some(DesktopEntry {
-                            exec: {
-                                let mut exec = map.get("Exec")?.to_string();
-
-                                for field_code in FIELD_CODE_LIST {
-                                    exec = exec.replace(field_code, "");
-                                }
-                                exec
-                            },
+                            exec: map.get("Exec")?.to_string(),
+                            desktop_file: entry.path(),
                             path: map.get("Path").map(PathBuf::from),
                             name: map.get("Name")?.to_string(),
                             localized_name: lang_choices
@@ -152,17 +140,8 @@ impl DesktopEntry {
 
                     if section[0].starts_with("[Desktop Action") {
                         ret.push(DesktopEntry {
-                            exec: match map.get("Exec") {
-                                Some(exec) => {
-                                    let mut exec = exec.to_string();
-
-                                    for field_code in FIELD_CODE_LIST {
-                                        exec = exec.replace(field_code, "");
-                                    }
-                                    exec
-                                }
-                                None => continue,
-                            },
+                            exec: match map.get("Exec") { Some(exec) => exec.to_string(), None => continue },
+                            desktop_file: entry.desktop_file.clone(),
                             path: entry.path.clone(),
                             name: match map.get("Name") {
                                 Some(name) => name.to_string(),
@@ -251,93 +230,143 @@ impl<'a> LangChoices<'a> {
     }
 }
 
-pub fn scrubber(config: &Config) -> Result<Vec<(DesktopEntry, u64)>, Box<dyn std::error::Error>> {
-    // Create iterator over all the files in the XDG_DATA_DIRS
-    // XDG compliancy is cool
-    let user_path = match env::var("XDG_DATA_HOME") {
-        Ok(data_home) => {
-            format!("{}/applications/", data_home)
-        }
-        Err(_) => {
-            format!(
-                "{}/.local/share/applications/",
-                env::var("HOME").expect("Unable to determine home directory!")
-            )
-        }
-    };
+fn visible(map: &HashMap<&str, &str>) -> bool {
+    let desktop = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    visible_on_desktop(map, &desktop)
+}
 
+fn visible_on_desktop(map: &HashMap<&str, &str>, desktop: &str) -> bool {
+    if ["Hidden", "NoDisplay"].iter().any(|key| map.get(key).is_some_and(|value| *value == "true")) { return false; }
+    let desktops: Vec<_> = desktop.split(':').collect();
+    if map.get("OnlyShowIn").is_some_and(|value| !value.split(';').any(|item| !item.is_empty() && desktops.contains(&item))) { return false; }
+    if map.get("NotShowIn").is_some_and(|value| value.split(';').any(|item| !item.is_empty() && desktops.contains(&item))) { return false; }
+    if let Some(program) = map.get("TryExec") {
+        if executable_path(program).is_none() { return false; }
+    }
+    true
+}
+
+pub(crate) fn executable_path(program: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = |path: &PathBuf| path.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0);
+    let path = PathBuf::from(program);
+    if path.is_absolute() { return executable(&path).then_some(path); }
+    env::var_os("PATH").and_then(|paths| env::split_paths(&paths).map(|directory| directory.join(program)).find(executable))
+}
+
+pub fn scrubber(config: &Config) -> Result<Vec<(DesktopEntry, u64)>, Box<dyn std::error::Error>> {
+    let user = env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    let system = env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    let directories = user.into_iter().chain(env::split_paths(&system));
     let lang = env::var("LANG").ok();
     let lang_choices = LangChoices::new(lang.as_deref());
+    Ok(collect_entries(config, directories, &lang_choices))
+}
 
-    let mut entries: HashMap<String, DesktopEntry> = match env::var("XDG_DATA_DIRS") {
-        Ok(data_dirs) => {
-            // The vec for all the DirEntry objects
-            let mut paths = Vec::new();
-            // Parse the XDG_DATA_DIRS variable and list files of all the paths
-            for dir in data_dirs.split(':') {
-                match fs::read_dir(format!("{}/applications/", dir)) {
-                    Ok(dir) => {
-                        paths.extend(dir);
-                    }
-                    Err(why) => {
-                        eprintln!("[applications] Error reading directory {}: {}", dir, why);
-                    }
+fn collect_entries(config: &Config, directories: impl Iterator<Item = PathBuf>, lang_choices: &LangChoices) -> Vec<(DesktopEntry, u64)> {
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
+    for directory in directories {
+        let Ok(files) = fs::read_dir(directory.join("applications")) else { continue; };
+        for file in files.filter_map(Result::ok) {
+            // The first desktop ID wins, even if the overriding entry is hidden.
+            // Two applications sharing a label/icon are still distinct IDs.
+            if file.path().extension() != Some(OsStr::new("desktop")) || !seen.insert(file.file_name()) { continue; }
+            entries.extend(DesktopEntry::from_dir_entry(&file, config, &lang_choices));
+        }
+    }
+    entries.into_iter().enumerate().map(|(id, entry)| (entry, id as u64)).collect()
+}
+
+impl DesktopEntry {
+    pub fn arguments(&self, exec: &str) -> Result<Vec<String>, String> {
+        // Decode the desktop-file string escaping before argv quoting. There is
+        // deliberately no shell expansion or command substitution here.
+        let mut decoded = String::new();
+        let mut chars = exec.chars();
+        while let Some(character) = chars.next() {
+            if character != '\\' { decoded.push(character); continue; }
+            match chars.next() {
+                Some('s') => decoded.push(' '), Some('n') => decoded.push('\n'),
+                Some('t') => decoded.push('\t'), Some('r') => decoded.push('\r'),
+                Some('\\') => decoded.push('\\'),
+                Some(other) => { decoded.push('\\'); decoded.push(other); }
+                None => return Err("unfinished desktop-file escape".into()),
+            }
+        }
+        let words = shlex::split(&decoded).ok_or("invalid Exec quoting")?;
+        let mut arguments = Vec::new();
+        for word in words {
+            if word == "%i" {
+                if !self.icon.is_empty() { arguments.extend(["--icon".into(), self.icon.clone()]); }
+                continue;
+            }
+            if ["%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%v", "%m"].contains(&word.as_str()) { continue; }
+            let mut result = String::new();
+            let mut chars = word.chars();
+            while let Some(character) = chars.next() {
+                if character != '%' { result.push(character); continue; }
+                match chars.next() {
+                    Some('%') => result.push('%'),
+                    Some('c') => result.push_str(&self.localized_name()),
+                    Some('k') => result.push_str(&self.desktop_file.to_string_lossy()),
+                    Some('f' | 'F' | 'u' | 'U' | 'd' | 'D' | 'n' | 'N' | 'v' | 'm') => (),
+                    _ => return Err("unsupported Exec field code".into()),
                 }
             }
-            // Make sure the list of paths isn't empty
-            if paths.is_empty() {
-                return Err("No valid desktop file dirs found!".into());
-            }
-
-            // Return it
-            paths
+            arguments.push(result);
         }
-        Err(_) => fs::read_dir("/usr/share/applications")?.collect(),
+        if arguments.first().is_none_or(String::is_empty) { return Err("empty Exec command".into()); }
+        Ok(arguments)
     }
-    .into_iter()
-    .filter_map(|entry| {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_why) => return None,
-        };
-        let entries = DesktopEntry::from_dir_entry(&entry, config, &lang_choices);
-        Some(
-            entries
-                .into_iter()
-                .map(|entry| (format!("{}{}", entry.name, entry.icon), entry)),
-        )
-    })
-    .flatten()
-    .collect();
+}
 
-    // Go through user directory desktop files for overrides
-    match fs::read_dir(&user_path) {
-        Ok(dir_entries) => entries.extend(
-            dir_entries
-                .into_iter()
-                .filter_map(|entry| {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(_why) => return None,
-                    };
-                    let entries = DesktopEntry::from_dir_entry(&entry, config, &lang_choices);
-                    Some(
-                        entries
-                            .into_iter()
-                            .map(|entry| (format!("{}{}", entry.name, entry.icon), entry)),
-                    )
-                })
-                .flatten(),
-        ),
-        Err(why) => eprintln!(
-            "[applications] Error reading directory {}: {}",
-            user_path, why
-        ),
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub(crate) fn entry(exec: &str, terminal: bool) -> DesktopEntry {
+        DesktopEntry {
+            exec: exec.into(), desktop_file: "/tmp/app with spaces.desktop".into(),
+            path: None, name: "Example App".into(), localized_name: None,
+            keywords: vec![], localized_keywords: None, desc: None, icon: "example".into(),
+            term: terminal, offset: 0, is_action: false,
+        }
     }
 
-    Ok(entries
-        .into_iter()
-        .enumerate()
-        .map(|(i, (_, entry))| (entry, i as u64))
-        .collect())
+    #[test]
+    fn field_codes_expand_after_tokenization_and_percent_is_literal() {
+        let entry = entry(r#"/usr/bin/app %c %k %i %F %%f "$HOME" "$(printf injected)""#, false);
+        assert_eq!(entry.arguments(&entry.exec).unwrap(), [
+            "/usr/bin/app", "Example App", "/tmp/app with spaces.desktop", "--icon", "example", "%f", "$HOME", "$(printf injected)"
+        ]);
+        assert!(entry.arguments("app \"unterminated").is_err());
+        assert!(entry.arguments("app %z").is_err());
+    }
+
+    #[test]
+    fn desktop_visibility_respects_session_filters() {
+        let only = HashMap::from([("OnlyShowIn", "GNOME;" )]);
+        assert!(!visible_on_desktop(&only, "sway"));
+        assert!(visible_on_desktop(&only, "sway:GNOME"));
+        assert!(!visible_on_desktop(&HashMap::from([("NotShowIn", "sway;")]), "sway"));
+        assert!(!visible_on_desktop(&HashMap::from([("Hidden", "true")]), "sway"));
+    }
+
+    #[test]
+    fn user_hidden_override_masks_system_id_but_equal_labels_are_distinct() {
+        let root = env::temp_dir().join(format!("dotfiles-desktop-{}", std::process::id()));
+        let user = root.join("user/applications"); let system = root.join("system/applications");
+        fs::create_dir_all(&user).unwrap(); fs::create_dir_all(&system).unwrap();
+        let text = "[Desktop Entry]\nType=Application\nName=Same Name\nIcon=example\nExec=/usr/bin/true\n";
+        fs::write(system.join("hidden.desktop"), text).unwrap();
+        fs::write(user.join("hidden.desktop"), "[Desktop Entry]\nType=Application\nName=Hidden\nHidden=true\n").unwrap();
+        fs::write(system.join("first.desktop"), text).unwrap();
+        fs::write(system.join("second.desktop"), text).unwrap();
+        let entries = collect_entries(&Config::default(), [root.join("user"), root.join("system")].into_iter(), &LangChoices::default());
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|(entry, _)| entry.name == "Same Name"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

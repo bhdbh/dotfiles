@@ -1,0 +1,16 @@
+[Unit]
+BindsTo=sway-session.service
+PartOf=sway-session.service
+After=sway-session.service sway-outputs.service
+Requires=sway-outputs.service
+Description=Quickshell bar for Sway
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=-%E/environment.d/91-cursor.conf
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=%E/quickshell/scripts/run-shell.sh
+Restart=always
+RestartSec=2
+TimeoutStopSec=5

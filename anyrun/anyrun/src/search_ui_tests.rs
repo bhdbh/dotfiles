@@ -48,6 +48,7 @@ fn actions_history_ui_flow() {
     let window = app.windows().into_iter().next().unwrap();
     let canvas = window.child().unwrap().downcast::<gtk::Overlay>().unwrap();
     let main = canvas.first_child().unwrap().downcast::<gtk::Box>().unwrap();
+    let entry = main.first_child().unwrap().downcast::<gtk::Text>().unwrap();
     let titles = || labels(main.upcast_ref()).iter().map(|label| label.text().to_string()).collect::<Vec<_>>();
     pump_until(|| window.is_mapped());
     assert_eq!(titles(), ["Suspend", "Custom action", "Reboot"], "Saved actions must appear without a title allowlist");
@@ -57,9 +58,56 @@ fn actions_history_ui_flow() {
     }
     sender.emit(AppMsg::Action(Action::Select));
     pump_until(|| titles() == ["Confirm", "Back"]);
+    assert_eq!(entry.text(), ": Suspend", "Confirmation must retain the saved query");
     assert!(!marker.exists(), "Replaying history must ask for confirmation before executing");
+    let back = labels(main.upcast_ref()).into_iter().find(|label| label.text() == "Back").unwrap()
+        .ancestor(gtk::ListBoxRow::static_type()).unwrap().downcast::<gtk::ListBoxRow>().unwrap();
+    back.parent().unwrap().downcast::<gtk::ListBox>().unwrap()
+        .emit_by_name::<()>("row-activated", &[&back]);
+    pump_until(|| titles() == ["Suspend"]);
+    assert!(!marker.exists(), "Returning from confirmation must not execute the action");
     sender.emit(AppMsg::Action(Action::Close));
     pump_until(|| !window.is_visible());
+}
+
+#[test]
+#[ignore = "requires an isolated compositor and delayed fixture provider"]
+fn history_replay_keeps_entry_empty_ui_flow() {
+    gtk::init().unwrap();
+    let config = env::var("ANYRUN_UI_CONFIG").unwrap();
+    let log = env::var("ANYRUN_SEARCH_LOG").unwrap();
+    let app = gtk::Application::new(Some("org.anyrun.replay.test"), gio::ApplicationFlags::NON_UNIQUE);
+    app.register(None::<&gio::Cancellable>).unwrap();
+    App::launch(&app, AppInit {
+        args: Args::parse_from(["anyrun", "--config-dir", &config]),
+        stdin: Vec::new(), env: Vec::new(),
+    }, None);
+    let window = app.windows().into_iter().next().unwrap();
+    let canvas = window.child().unwrap().downcast::<gtk::Overlay>().unwrap();
+    let main = canvas.first_child().unwrap().downcast::<gtk::Box>().unwrap();
+    let entry = main.first_child().unwrap().downcast::<gtk::Text>().unwrap();
+    pump_until(|| window.is_mapped() && !labels(main.upcast_ref()).is_empty());
+    let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    entry.connect_changed(glib::clone!(#[strong] changes, move |entry| {
+        changes.borrow_mut().push(entry.text().to_string());
+    }));
+    let controllers = window.observe_controllers();
+    let keys = (0..controllers.n_items()).find_map(|index| {
+        controllers.item(index)?.downcast::<gtk::EventControllerKey>().ok()
+    }).unwrap();
+    assert!(keys.emit_by_name::<bool>("key-pressed", &[&gtk::gdk::Key::Return, &0u32, &gtk::gdk::ModifierType::empty()]));
+    pump_until(|| fs::read_to_string(&log).unwrap().contains("Replay"));
+    pump_for(100, || {
+        assert!(entry.text().is_empty(), "Replaying history must leave the entry empty while waiting");
+        assert!(window.is_visible());
+    });
+    pump_until(|| !window.is_visible());
+    assert!(changes.borrow().is_empty(), "Replaying history changed the entry: {:?}", changes.borrow());
+    let requests: Vec<serde_json::Value> = fs::read_to_string(log).unwrap().lines()
+        .map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(requests.iter().filter(|request| request.get("Replay").is_some()).count(), 1);
+    assert!(requests.iter().any(|request| request["Replay"]["index"] == 0));
+    assert!(!requests.iter().any(|request| request.get("Query").is_some()), "Replaying history must not start a search");
 }
 
 #[test]
@@ -84,6 +132,10 @@ fn search_debounce_ui_flow() {
         assert!(main.has_css_class("has-results"));
     };
     pump_until(|| window.is_mapped() && titles() == ["History seed"]);
+    // Input methods can notify an unchanged empty entry after it gains focus.
+    // That is not a user clearing a search and must leave startup history alone.
+    entry.emit_by_name::<()>("changed", &[]);
+    pump_for(700, assert_seed);
     entry.set_text("b"); pump_for(35, assert_seed);
     entry.set_text("br"); pump_for(35, assert_seed);
     entry.set_text("brave"); pump_for(75, assert_seed);

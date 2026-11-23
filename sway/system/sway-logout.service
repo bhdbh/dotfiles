@@ -1,0 +1,8 @@
+[Unit]
+Description=Log out of the Sway graphical session
+
+[Service]
+Type=oneshot
+ExecStart=%E/sway/scripts/logout.sh
+TimeoutStartSec=2min
+Slice=session.slice

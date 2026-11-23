@@ -1,18 +1,17 @@
-use std::{collections::HashMap, env, fs, io, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{collections::HashMap, env, fs, io, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use globber::Pattern;
-use index::{GetPath, Index};
+use index::Index;
 use inotify::{EventMask, Inotify, WatchDescriptor};
-use kidex_common::{IndexEntry, IpcCommand, IpcResponse, DEFAULT_SOCKET};
+use kidex_common::DEFAULT_SOCKET;
 use serde::{de::Error, Deserialize, Deserializer};
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook_tokio::Signals;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::UnixListener,
     sync::{
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Sender},
         Mutex,
     },
 };
@@ -20,6 +19,7 @@ use tokio::{
 mod index;
 mod mounts;
 mod ignore_rules;
+mod ipc;
 
 #[derive(Clone, Deserialize)]
 pub struct Config {
@@ -142,7 +142,7 @@ enum EventLoopMsg {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> io::Result<()> {
     env_logger::init();
 
     let config_path = env::var("XDG_CONFIG_HOME")
@@ -153,7 +153,7 @@ async fn main() {
                 Ok(home) => home,
                 Err(why) => {
                     log::error!("Failed to determine home directory: {}", why);
-                    return;
+                    return Ok(());
                 }
             }
         ));
@@ -162,7 +162,6 @@ async fn main() {
     let mut config: Config = ron::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
     let mut usb_mounts = if config.monitor_usb_mounts { mounts::discover().unwrap_or_default() } else { Vec::new() };
     let mut effective_config = with_usb_mounts(&config, &usb_mounts);
-    let mut last_mount_check = Instant::now();
     let mut ignore_fingerprint = ignore_rules::fingerprint(config.ignore_file.as_deref());
     let mut index = Index::new();
 
@@ -187,119 +186,62 @@ async fn main() {
         ipc_tx.clone(),
         Signals::new(TERM_SIGNALS).unwrap(),
     ));
-    // Spawn IPC task
-    tokio::spawn(ipc_task(listener, index.clone(), ipc_tx, ipc_rx));
+    // Keep one reader for this inotify instance. Version 0.10 exposes the
+    // shared-fd event_stream API; watchers are still managed through inotify.
+    let mut filesystem_events = inotify.event_stream(vec![0; 64 * 1024])?;
+    let mut mount_checks = tokio::time::interval(Duration::from_secs(1));
+    mount_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ipc_handle = tokio::spawn(ipc::serve(listener, index.clone(), ipc_tx, ipc_rx));
 
-    // Buffer used by inotify
-    let mut buffer = [0; 1024];
-
-    'event_loop: loop {
-        // Sleep for a while to not keep the thread busy all the time
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        if last_mount_check.elapsed() >= Duration::from_secs(1) {
-            last_mount_check = Instant::now();
-            let fingerprint = ignore_rules::fingerprint(config.ignore_file.as_deref());
-            let current = if config.monitor_usb_mounts {
-                mounts::discover().unwrap_or_else(|why| {
-                    log::error!("Failed to inspect USB mounts: {why}");
-                    usb_mounts.clone()
-                })
-            } else { Vec::new() };
-            let updated = with_usb_mounts(&config, &current);
-            if current != usb_mounts || updated.active_drive_roots != effective_config.active_drive_roots
-                || fingerprint != ignore_fingerprint {
+    loop {
+        tokio::select! {
+            result = &mut ipc_handle => {
+                return Err(io::Error::new(io::ErrorKind::Other,
+                    format!("IPC task stopped unexpectedly: {result:?}")));
+            }
+            _ = mount_checks.tick() => {
+                let fingerprint = ignore_rules::fingerprint(config.ignore_file.as_deref());
+                let current = if config.monitor_usb_mounts {
+                    mounts::discover().unwrap_or_else(|why| {
+                        log::error!("Failed to inspect USB mounts: {why}");
+                        usb_mounts.clone()
+                    })
+                } else { Vec::new() };
+                let updated = with_usb_mounts(&config, &current);
+                if current != usb_mounts || updated.active_drive_roots != effective_config.active_drive_roots
+                    || fingerprint != ignore_fingerprint {
                     log::info!("USB mounts, drive links or ignore rules changed; updating index");
                     usb_mounts = current;
                     effective_config = updated;
                     ignore_fingerprint = fingerprint;
-                    index.lock().await.full_index(&mut inotify, &effective_config).unwrap();
+                    index.lock().await.full_index(&mut inotify, &effective_config)?;
                 }
-        }
-        match events_rx.try_recv() {
-            Ok(event) => match event {
-                EventLoopMsg::FullIndex => {
-                    index
-                        .lock()
-                        .await
-                        .full_index(&mut inotify, &effective_config)
-                        .unwrap();
+            }
+            event = events_rx.recv() => match event {
+                Some(EventLoopMsg::FullIndex) => {
+                    index.lock().await.full_index(&mut inotify, &effective_config)?;
                 }
-                EventLoopMsg::Quit => break,
-                EventLoopMsg::Reload => {
-                    match ron::from_str::<Config>(&fs::read_to_string(&config_path).unwrap())
-                    {
+                Some(EventLoopMsg::Quit) | None => break,
+                Some(EventLoopMsg::Reload) => {
+                    let loaded = fs::read_to_string(&config_path)
+                        .map_err(|why| why.to_string())
+                        .and_then(|text| ron::from_str::<Config>(&text).map_err(|why| why.to_string()));
+                    match loaded {
                         Ok(new_config) => {
                             config = new_config;
                             ignore_fingerprint = ignore_rules::fingerprint(config.ignore_file.as_deref());
                             usb_mounts = if config.monitor_usb_mounts { mounts::discover().unwrap_or_default() } else { Vec::new() };
                             effective_config = with_usb_mounts(&config, &usb_mounts);
-                            // Reindex everything if the config was reloaded
-                            index
-                                .lock()
-                                .await
-                                .full_index(&mut inotify, &effective_config)
-                                .unwrap();
+                            index.lock().await.full_index(&mut inotify, &effective_config)?;
                         }
-                        Err(why) => {
-                            log::error!("Failed to load config: {}", why);
-                        }
+                        Err(why) => log::error!("Failed to load config: {why}"),
                     }
                 }
             },
-            Err(mpsc::error::TryRecvError::Empty) => (),
-            Err(why) => {
-                log::error!("Failed receive message from IPC task: {}", why);
-            }
-        }
-
-        let events = match inotify.read_events(&mut buffer) {
-            Ok(events) => events,
-            // The next event(s) is/are not ready yet if the error is WouldBlock
-            // so it counterintuitively is not actually an error.
-            Err(why) => {
-                if why.kind() != io::ErrorKind::WouldBlock {
-                    log::error!("Error reading inotify events: {}", why);
-                }
-                continue 'event_loop;
-            }
-        };
-
-        for event in events {
-            let mut index = index.lock().await;
-
-            if index.inner.get(&event.wd).is_none() {
-                log::warn!("Event received from nonexistent watcher: {:?}", event.name);
-                continue;
-            }
-
-            let path = if let Some(name) = event.name {
-                PathBuf::from(name)
-            } else {
-                log::warn!("Event received with no name!");
-                continue;
-            };
-
-            let path_str = format!(
-                "{}/{}",
-                index.inner.get_path(&event.wd).display(),
-                path.display()
-            );
-
-            if event.mask.contains(EventMask::CREATE) {
-                log::info!("File created: {}", path_str);
-                index.create_index(&mut inotify, &path, &event);
-            }
-            if event.mask.contains(EventMask::DELETE) {
-                log::info!("File deleted: {}", path_str);
-                index.remove_index(&mut inotify, &path, &event);
-            }
-            if event.mask.contains(EventMask::MOVED_FROM) {
-                log::info!("File moved from: {}", path_str);
-                index.remove_index(&mut inotify, &path, &event);
-            }
-            if event.mask.contains(EventMask::MOVED_TO) {
-                log::info!("File moved to: {}", path_str);
-                index.create_index(&mut inotify, &path, &event);
+            event = filesystem_events.next() => {
+                let event = event.ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "inotify stopped"))??;
+                let mut index = index.lock().await;
+                process_filesystem_event(&mut index, &mut inotify, &effective_config, &event)?;
             }
         }
     }
@@ -308,91 +250,45 @@ async fn main() {
         log::error!("Failed to clear index: {}", why);
     }
 
-    events_tx.send(()).await.unwrap();
+    let _ = events_tx.send(()).await;
+    match ipc_handle.await {
+        Ok(result) => result?,
+        Err(why) => return Err(io::Error::new(io::ErrorKind::Other, why)),
+    }
+    let _ = fs::remove_file(&socket_path);
+    Ok(())
+}
+
+fn process_filesystem_event(
+    index: &mut Index, inotify: &mut Inotify, config: &Config,
+    event: &inotify::EventOwned,
+) -> io::Result<()> {
+    // Overflow has no normal watcher or filename. Handle it before those
+    // filters, otherwise lost events silently corrupt the index.
+    if event.mask.contains(EventMask::Q_OVERFLOW) {
+        log::warn!("inotify queue overflow; rebuilding index");
+        return index.full_index(inotify, config);
+    }
+    if !index.inner.contains_key(&event.wd) { return Ok(()); }
+    let Some(name) = event.name.as_deref() else { return Ok(()); };
+    let path = PathBuf::from(name);
+    let borrowed = inotify::Event {
+        wd: event.wd.clone(), mask: event.mask,
+        cookie: event.cookie, name: Some(name),
+    };
+    if event.mask.intersects(EventMask::DELETE | EventMask::MOVED_FROM) {
+        index.remove_index(inotify, &path, &borrowed);
+    }
+    if event.mask.intersects(EventMask::CREATE | EventMask::MOVED_TO) {
+        index.create_index(inotify, &path, &borrowed);
+    }
+    Ok(())
 }
 
 async fn signal_task(signal_tx: Sender<EventLoopMsg>, mut signals: Signals) {
-    // Wait for a signal to arrive, we only listen for termination signals so any
-    // received event will be one we should act on
     signals.next().await;
-
     log::info!("Termination signal received! Quitting...");
-
-    signal_tx.send(EventLoopMsg::Quit).await.unwrap();
-}
-
-async fn ipc_task(
-    listener: UnixListener,
-    index: Arc<Mutex<Index>>,
-    ipc_tx: Sender<EventLoopMsg>,
-    mut ipc_rx: Receiver<()>,
-) {
-    loop {
-        tokio::select! {
-            Ok((stream, _)) = listener.accept() => {
-                let mut buf = Vec::new();
-                let mut stream = BufStream::new(stream);
-                stream.read_until(0x0, &mut buf).await.unwrap();
-                buf.pop(); // Remove the delimiting null byte
-
-                match serde_json::from_slice::<IpcCommand>(&buf).unwrap() {
-                    IpcCommand::FullIndex => {
-                        ipc_tx.send(EventLoopMsg::FullIndex).await.unwrap();
-                        if let Err(why) = stream.write_all(&serde_json::to_vec(&IpcResponse::Success).unwrap()).await {
-                            log::error!("Error writing reply to stream: {}", why);
-                        }
-                    }
-                    IpcCommand::Quit => {
-                        ipc_tx.send(EventLoopMsg::Quit).await.unwrap();
-                        if let Err(why) = stream.write_all(&serde_json::to_vec(&IpcResponse::Success).unwrap()).await {
-                            log::error!("Error writing reply to stream: {}", why);
-                        }
-                        break;
-                    }
-                    IpcCommand::Reload => {
-                        ipc_tx.send(EventLoopMsg::Reload).await.unwrap();
-                        if let Err(why) = stream.write_all(&serde_json::to_vec(&IpcResponse::Success).unwrap()).await {
-                            log::error!("Error writing reply to stream: {}", why);
-                        }
-                    }
-                    IpcCommand::GetIndex(path) => {
-                        let index = index.lock().await;
-                        let paths = match path {
-                            Some(path) => {
-                                index
-                                    .inner
-                                    .iter()
-                                    .find(|(desc, _)| index.inner.get_path(&desc) == path)
-                                    .map(|(desc, _)| index.traverse(desc.clone())
-                                        .into_iter()
-                                        .flat_map(|(desc, dir)| {
-                                            let parent_path = index.inner.get_path(&desc);
-                                            dir.children.into_iter().map(move |(path, child)|
-                                                IndexEntry {
-                                                    path: parent_path.iter().chain(path.iter()).collect(),
-                                                    directory: matches!(child, ChildIndex::Directory {..})
-                                                }
-                                            )
-                                        })
-                                        .collect::<Vec<_>>()
-                                    )
-                            }
-                            None => Some(index.entries()),
-                        };
-
-                        let buf = serde_json::to_vec(&match paths {
-                            Some(paths) => IpcResponse::Index(paths),
-                            None => IpcResponse::NotFound,
-                        }).unwrap();
-
-                        stream.write_all(&buf).await.unwrap();
-                    },
-                }
-                stream.flush().await.unwrap();
-            }
-            _ = ipc_rx.recv() => break
-        }
-    }
+    let _ = signal_tx.send(EventLoopMsg::Quit).await;
 }
 
 #[cfg(test)]
@@ -516,4 +412,38 @@ mod usb_index_tests {
         assert!(!index.entries().iter().any(|e| e.path.starts_with(link.join("project/renamed"))));
         index.clear_index(&mut inotify).unwrap();
     }
+    #[test]
+    fn overflow_rebuilds_even_without_a_known_watcher_or_name() {
+        let (_fixture, _, _, config, mounted) = fixture(false);
+        let home = config.directories[0].path.clone();
+        let effective = with_usb_mounts(&config, &mounted);
+        let mut inotify = Inotify::init().unwrap();
+        let mut index = Index::new();
+        index.full_index(&mut inotify, &effective).unwrap();
+        let descriptor = index.inner.keys().next().unwrap().clone();
+        index.clear_index(&mut inotify).unwrap();
+        fs::write(home.join("missed-during-overflow.txt"), "new").unwrap();
+        process_filesystem_event(&mut index, &mut inotify, &effective, &inotify::Event {
+            wd: descriptor, mask: EventMask::Q_OVERFLOW, cookie: 0, name: None,
+        }).unwrap();
+        assert!(index.entries().iter().any(|entry| entry.path == home.join("missed-during-overflow.txt")));
+    }
+
+    #[test]
+    fn newly_created_fifo_is_skipped_without_opening_it() {
+        let (_fixture, _, _, config, mounted) = fixture(false);
+        let home = config.directories[0].path.clone();
+        let effective = with_usb_mounts(&config, &mounted);
+        let mut inotify = Inotify::init().unwrap();
+        let mut index = Index::new();
+        index.full_index(&mut inotify, &effective).unwrap();
+        let descriptor = index.inner.iter().find(|(_, directory)| directory.path == home).unwrap().0.clone();
+        let fifo = home.join("named-pipe");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        process_filesystem_event(&mut index, &mut inotify, &effective, &inotify::Event {
+            wd: descriptor, mask: EventMask::CREATE, cookie: 0, name: Some("named-pipe".into()),
+        }).unwrap();
+        assert!(!index.entries().iter().any(|entry| entry.path == fifo));
+    }
+
 }

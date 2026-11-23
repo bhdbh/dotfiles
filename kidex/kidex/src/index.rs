@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
-    fs::{self, File},
+    fs,
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -102,11 +102,15 @@ impl Index {
 
         // Drive links are indexed as explicit roots by with_usb_mounts. Other
         // symlinks stay untraversed, just as during a full scan, avoiding cycles.
-        if fs::symlink_metadata(&full_path).map(|m| m.file_type().is_symlink()).unwrap_or(true) {
+        let metadata = match fs::symlink_metadata(&full_path) {
+            Ok(metadata) => metadata,
+            Err(_) => return, // The entry may already have disappeared.
+        };
+        if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
             return;
         }
 
-        if self.is_excluded(&self.inner.get(&event.wd).unwrap().watch_dir, &full_path, full_path.is_dir()) {
+        if self.is_excluded(&self.inner.get(&event.wd).unwrap().watch_dir, &full_path, metadata.is_dir()) {
             return;
         }
 
@@ -122,14 +126,9 @@ impl Index {
             return;
         }
 
-        let file = match File::open(full_path) {
-            Ok(file) => file,
-            Err(why) => {
-                log::error!("Failed to open file: {}", why);
-                return;
-            }
-        };
-        let child = if file.metadata().unwrap().file_type().is_dir() {
+        // Inspect metadata only. Opening a newly created FIFO would block the
+        // event loop (and every client waiting for the index mutex).
+        let child = if metadata.is_dir() {
             // If recursion is enabled, recurse through the directories
             if self.inner.get(&event.wd).unwrap().watch_dir.recurse {
                 log::info!("Directory created, adding watcher!");
@@ -152,7 +151,7 @@ impl Index {
             } else {
                 ChildIndex::Directory { descriptor: None }
             }
-        } else if file.metadata().unwrap().file_type().is_file() {
+        } else if metadata.is_file() {
             ChildIndex::File {}
         } else {
             log::warn!("A non-file and non-directory created!");

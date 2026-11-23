@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore Acer battery charge limit
+After=systemd-modules-load.service
+ConditionPathExists=/sys/bus/wmi/drivers/acer-wmi-battery/health_mode
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/quickshell-battery-charge restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -47,6 +47,7 @@ pub enum AppMsg {
     EntryChanged(String),
     SearchDue(u64),
     RecallCalculation(String),
+    ReplayHistory { index: usize, query: String },
     MonitorsChanged,
     PointerMonitor(Option<String>),
     RefreshPointer,
@@ -69,6 +70,7 @@ pub struct App {
     tx: mpsc::Sender<anyrun_provider_ipc::Request>,
     css_provider: gtk::CssProvider,
     initial_history: bool,
+    replay_query: Option<String>,
     calculated_text: Option<String>,
     pending_calculation: Option<String>,
     screens: crate::screens::Screens,
@@ -96,16 +98,14 @@ impl App {
             sender.input(AppMsg::RecallCalculation(crate::calculator::result_text(prefix, &item.content.title)));
             return;
         }
-        let request = if let Some((index, query)) = &item.history {
-            entry.set_text(query);
-            ipc::Request::Replay { index: *index }
+        if let Some((index, query)) = &item.history {
+            sender.input(AppMsg::ReplayHistory { index: *index, query: query.clone() });
         } else {
-            ipc::Request::Handle {
+            let _ = self.tx.blocking_send(ipc::Request::Handle {
                 plugin: plugin.plugin_info.clone(),
                 selection: item.content.clone(),
-            }
-        };
-        let _ = self.tx.blocking_send(request);
+            });
+        }
     }
 
     pub fn launch(
@@ -268,7 +268,7 @@ impl Component for App {
                         set_activates_default: false,
                         connect_changed[sender] => move |entry| {
                             sender.input(AppMsg::EntryChanged(entry.text().into()));
-                        },
+                        } @entry_changed,
                     },
                     #[local]
                     plugins -> gtk::Box {
@@ -398,6 +398,7 @@ impl Component for App {
             tx,
             css_provider,
             initial_history: true,
+            replay_query: None,
             calculated_text: None,
             pending_calculation: None,
             screens,
@@ -490,6 +491,7 @@ impl Component for App {
                 match action {
                 Action::Close => {
                     self.search.change(String::new());
+                    self.replay_query = None;
                     self.select_when_ready = false;
                     self.startup.close();
                     root.set_visible(false);
@@ -578,7 +580,11 @@ impl Component for App {
                 // Replacing GtkText contents may queue an intermediate empty
                 // value. Only the current value should clear state or query.
                 if widgets.entry.text().as_str() != text { return; }
+                // Focusing an empty entry can produce a redundant notification
+                // from the input method. Keep initial history until actual input.
+                if self.initial_history && text.is_empty() { return; }
                 self.initial_history = false;
+                self.replay_query = None;
                 self.select_when_ready = false;
                 self.exclusive_plugin = None;
                 let revision = self.search.change(text.clone());
@@ -613,6 +619,10 @@ impl Component for App {
                 widgets.entry.set_position(-1);
                 widgets.entry.add_css_class("calculated");
                 widgets.entry.grab_focus_without_selecting();
+            }
+            AppMsg::ReplayHistory { index, query } => {
+                self.replay_query = Some(query);
+                let _ = self.tx.blocking_send(ipc::Request::Replay { index });
             }
             AppMsg::PluginOutput(PluginBoxOutput::MatchesLoaded { history, revision }) => {
                 if let Some(revision) = revision {
@@ -744,9 +754,19 @@ impl Component for App {
                 }
             }
             ipc::Response::Handled { plugin, result } => {
+                let replay_query = self.replay_query.take();
                 match result {
                     HandleResult::Close => sender.input(AppMsg::Action(Action::Close)),
                     HandleResult::Refresh(exclusive) => {
+                        // Direct history replay leaves the entry untouched. Only
+                        // restore its query when the plugin opens a follow-up UI.
+                        if let Some(query) = replay_query {
+                            self.initial_history = false;
+                            widgets.entry.block_signal(&widgets.entry_changed);
+                            widgets.entry.set_text(&query);
+                            widgets.entry.set_position(-1);
+                            widgets.entry.unblock_signal(&widgets.entry_changed);
+                        }
                         self.exclusive_plugin = exclusive.then_some(plugin);
                         self.select_when_ready = false;
                         let revision = self.search.change(widgets.entry.text().into());

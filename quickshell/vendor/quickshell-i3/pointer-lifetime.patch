@@ -1,0 +1,197 @@
+From d4c92973b53d9fa34cc110d3b974eb6bde5b3027 Mon Sep 17 00:00:00 2001
+From: outfoxxed <outfoxxed@outfoxxed.me>
+Date: Thu, 9 Apr 2026 00:34:57 -0700
+Subject: [PATCH] i3/ipc: ensure monitor/workspace pointers are nulled on
+ destroy
+
+---
+ src/x11/i3/ipc/controller.cpp |  8 +-------
+ src/x11/i3/ipc/monitor.cpp    | 28 ++++++++++++++++++++++------
+ src/x11/i3/ipc/monitor.hpp    |  7 +++++--
+ src/x11/i3/ipc/workspace.cpp  | 26 +++++++++++++++++++++++---
+ src/x11/i3/ipc/workspace.hpp  |  7 ++++++-
+ 5 files changed, 57 insertions(+), 19 deletions(-)
+
+diff --git a/src/x11/i3/ipc/controller.cpp b/src/x11/i3/ipc/controller.cpp
+index 1a08c6357..a83afd498 100644
+--- a/src/x11/i3/ipc/controller.cpp
++++ b/src/x11/i3/ipc/controller.cpp
+@@ -276,7 +276,7 @@ void I3IpcController::handleWorkspaceEvent(I3IpcEvent* event) {
+ 
+ 		if (newWorkspace->bindableMonitor().value()) {
+ 			auto* monitor = newWorkspace->bindableMonitor().value();
+-			monitor->setFocusedWorkspace(newWorkspace);
++			monitor->setActiveWorkspace(newWorkspace);
+ 			this->bFocusedMonitor = monitor;
+ 		}
+ 	} else if (change == "empty") {
+@@ -286,13 +286,7 @@ void I3IpcController::handleWorkspaceEvent(I3IpcEvent* event) {
+ 
+ 		if (oldWorkspace != nullptr) {
+ 			qCInfo(logI3Ipc) << "Deleting" << oldWorkspace->bindableId().value() << name;
+-
+-			if (this->bFocusedWorkspace == oldWorkspace) {
+-				this->bFocusedMonitor->setFocusedWorkspace(nullptr);
+-			}
+-
+ 			this->workspaces()->removeObject(oldWorkspace);
+-
+ 			delete oldWorkspace;
+ 		} else {
+ 			qCInfo(logI3Ipc) << "Workspace" << name << "has already been deleted";
+diff --git a/src/x11/i3/ipc/monitor.cpp b/src/x11/i3/ipc/monitor.cpp
+index fb0ec869a..7afb68ef9 100644
+--- a/src/x11/i3/ipc/monitor.cpp
++++ b/src/x11/i3/ipc/monitor.cpp
+@@ -40,21 +40,37 @@ void I3Monitor::updateFromObject(const QVariantMap& obj) {
+ 	this->bHeight = rect.value("height").value<qint32>();
+ 	this->bScale = obj.value("scale").value<qreal>();
+ 
+-	if (!this->bActiveWorkspace
+-	    || activeWorkspaceName != this->bActiveWorkspace->bindableName().value())
+-	{
++	auto* activeWorkspace = this->bActiveWorkspace.value();
++	if (!activeWorkspace || activeWorkspaceName != activeWorkspace->bindableName().value()) {
+ 		if (activeWorkspaceName.isEmpty()) {
+-			this->bActiveWorkspace = nullptr;
++			activeWorkspace = nullptr;
+ 		} else {
+-			this->bActiveWorkspace = this->ipc->findWorkspaceByName(activeWorkspaceName);
++			activeWorkspace = this->ipc->findWorkspaceByName(activeWorkspaceName);
+ 		}
+ 	};
+ 
++	this->setActiveWorkspace(activeWorkspace);
++
+ 	Qt::endPropertyUpdateGroup();
+ }
+ 
+ void I3Monitor::updateInitial(const QString& name) { this->bName = name; }
+ 
+-void I3Monitor::setFocusedWorkspace(I3Workspace* workspace) { this->bActiveWorkspace = workspace; };
++void I3Monitor::setActiveWorkspace(I3Workspace* workspace) {
++	auto* oldWorkspace = this->bActiveWorkspace.value();
++	if (oldWorkspace == workspace) return;
++
++	if (oldWorkspace) {
++		QObject::disconnect(oldWorkspace, nullptr, this, nullptr);
++	}
++
++	if (workspace) {
++		QObject::connect(workspace, &QObject::destroyed, this, &I3Monitor::onActiveWorkspaceDestroyed);
++	}
++
++	this->bActiveWorkspace = workspace;
++}
++
++void I3Monitor::onActiveWorkspaceDestroyed() { this->bActiveWorkspace = nullptr; }
+ 
+ } // namespace qs::i3::ipc
+diff --git a/src/x11/i3/ipc/monitor.hpp b/src/x11/i3/ipc/monitor.hpp
+index cd348b1af..c328d8b1e 100644
+--- a/src/x11/i3/ipc/monitor.hpp
++++ b/src/x11/i3/ipc/monitor.hpp
+@@ -55,7 +55,7 @@ class I3Monitor: public QObject {
+ 	[[nodiscard]] QBindable<qreal> bindableScale() { return &this->bScale; }
+ 	[[nodiscard]] QBindable<bool> bindableFocused() { return &this->bFocused; }
+ 
+-	[[nodiscard]] QBindable<I3Workspace*> bindableActiveWorkspace() {
++	[[nodiscard]] QBindable<I3Workspace*> bindableActiveWorkspace() const {
+ 		return &this->bActiveWorkspace;
+ 	}
+ 
+@@ -64,7 +64,7 @@ class I3Monitor: public QObject {
+ 	void updateFromObject(const QVariantMap& obj);
+ 	void updateInitial(const QString& name);
+ 
+-	void setFocusedWorkspace(I3Workspace* workspace);
++	void setActiveWorkspace(I3Workspace* workspace);
+ 
+ signals:
+ 	void idChanged();
+@@ -79,6 +79,9 @@ class I3Monitor: public QObject {
+ 	void lastIpcObjectChanged();
+ 	void focusedChanged();
+ 
++private slots:
++	void onActiveWorkspaceDestroyed();
++
+ private:
+ 	I3IpcController* ipc;
+ 
+diff --git a/src/x11/i3/ipc/workspace.cpp b/src/x11/i3/ipc/workspace.cpp
+index 03fadc26f..530f0a2bf 100644
+--- a/src/x11/i3/ipc/workspace.cpp
++++ b/src/x11/i3/ipc/workspace.cpp
+@@ -43,14 +43,17 @@ void I3Workspace::updateFromObject(const QVariantMap& obj) {
+ 
+ 	auto monitorName = obj.value("output").value<QString>();
+ 
+-	if (!this->bMonitor || monitorName != this->bMonitor->bindableName().value()) {
++	auto* monitor = this->bMonitor.value();
++	if (!monitor || monitorName != monitor->bindableName().value()) {
+ 		if (monitorName.isEmpty()) {
+-			this->bMonitor = nullptr;
++			monitor = nullptr;
+ 		} else {
+-			this->bMonitor = this->ipc->findMonitorByName(monitorName, true);
++			monitor = this->ipc->findMonitorByName(monitorName, true);
+ 		}
+ 	}
+ 
++	this->setMonitor(monitor);
++
+ 	Qt::endPropertyUpdateGroup();
+ }
+ 
+@@ -58,4 +61,21 @@ void I3Workspace::activate() {
+ 	this->ipc->dispatch(QString("workspace number %1").arg(this->bNumber.value()));
+ }
+ 
++void I3Workspace::setMonitor(I3Monitor* monitor) {
++	auto* oldMonitor = this->bMonitor.value();
++	if (oldMonitor == monitor) return;
++
++	if (oldMonitor) {
++		QObject::disconnect(oldMonitor, nullptr, this, nullptr);
++	}
++
++	if (monitor) {
++		QObject::connect(monitor, &QObject::destroyed, this, &I3Workspace::onMonitorDestroyed);
++	}
++
++	this->bMonitor = monitor;
++}
++
++void I3Workspace::onMonitorDestroyed() { this->bMonitor = nullptr; }
++
+ } // namespace qs::i3::ipc
+diff --git a/src/x11/i3/ipc/workspace.hpp b/src/x11/i3/ipc/workspace.hpp
+index f540545d3..c08e926c1 100644
+--- a/src/x11/i3/ipc/workspace.hpp
++++ b/src/x11/i3/ipc/workspace.hpp
+@@ -57,11 +57,13 @@ class I3Workspace: public QObject {
+ 	[[nodiscard]] QBindable<bool> bindableActive() { return &this->bActive; }
+ 	[[nodiscard]] QBindable<bool> bindableFocused() { return &this->bFocused; }
+ 	[[nodiscard]] QBindable<bool> bindableUrgent() { return &this->bUrgent; }
+-	[[nodiscard]] QBindable<I3Monitor*> bindableMonitor() { return &this->bMonitor; }
++	[[nodiscard]] QBindable<I3Monitor*> bindableMonitor() const { return &this->bMonitor; }
+ 	[[nodiscard]] QVariantMap lastIpcObject() const;
+ 
+ 	void updateFromObject(const QVariantMap& obj);
+ 
++	void setMonitor(I3Monitor* monitor);
++
+ signals:
+ 	void idChanged();
+ 	void nameChanged();
+@@ -72,6 +74,9 @@ class I3Workspace: public QObject {
+ 	void monitorChanged();
+ 	void lastIpcObjectChanged();
+ 
++private slots:
++	void onMonitorDestroyed();
++
+ private:
+ 	I3IpcController* ipc;
+ 

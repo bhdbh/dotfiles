@@ -1,0 +1,20 @@
+[Unit]
+Description=Sway monitor and workspace policy
+BindsTo=sway-session.service
+PartOf=sway-session.service
+After=sway-session.service
+Wants=quickshell.service
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecCondition=/usr/bin/test -S ${SWAYSOCK}
+ExecStart=/usr/bin/python3 %E/sway/scripts/outputs.py --watch
+RuntimeDirectory=sway-outputs
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+TimeoutStartSec=15
+Restart=on-failure
+RestartSec=2
+Slice=session.slice

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Micro
+GenericName=Text Editor
+Comment=Edit plain text files in the terminal
+Exec=foot --app-id=micro micro %F
+TryExec=micro
+Terminal=false
+Icon=micro
+Categories=Utility;TextEditor;
+Keywords=Text;Editor;Terminal;
+MimeType=text/plain;

@@ -1,0 +1,73 @@
+# The prompt PNG comes from the same 8x16 PSF font as the Linux console.
+Window.SetBackgroundTopColor (0, 0, 0);
+Window.SetBackgroundBottomColor (0, 0, 0);
+
+prompt_image = Image ("disk-password.png");
+prompt_sprite = Sprite (prompt_image);
+prompt_sprite.SetPosition (0, 0, 1);
+prompt_sprite.SetOpacity (0);
+
+cursor_sprite = Sprite (Image ("cursor.png"));
+cursor_sprite.SetPosition (prompt_image.GetWidth (), 0, 2);
+cursor_sprite.SetOpacity (0);
+
+message_sprite = Sprite ();
+message_sprite.SetPosition (0, prompt_image.GetHeight () * 2, 1);
+message_sprite.SetOpacity (0);
+message_text = "";
+dialogue_visible = 0;
+ticks = 0;
+
+fun display_password (prompt, bullets)
+{
+    # Plymouth still collects/submits the password. Ignore its length entirely.
+    prompt_sprite.SetImage (prompt_image);
+    prompt_sprite.SetOpacity (1);
+    cursor_sprite.SetPosition (prompt_image.GetWidth (), 0, 2);
+    dialogue_visible = 1;
+}
+
+fun display_question (prompt, entry)
+{
+    # Preserve non-password questions (for example, a recovery confirmation).
+    local.image = Image.Text (prompt + " " + entry, 0.666667, 0.666667,
+                              0.666667, 1, "monospace 12");
+    prompt_sprite.SetImage (local.image);
+    prompt_sprite.SetOpacity (1);
+    cursor_sprite.SetPosition (local.image.GetWidth (), 0, 2);
+    dialogue_visible = 1;
+}
+
+fun display_normal ()
+{
+    dialogue_visible = 0;
+    prompt_sprite.SetOpacity (0);
+    cursor_sprite.SetOpacity (0);
+}
+
+fun display_message (text)
+{
+    message_text = text;
+    message_sprite.SetImage (Image.Text (text, 0.666667, 0.666667,
+                                         0.666667, 1, "monospace 12"));
+    message_sprite.SetOpacity (1);
+}
+
+fun hide_message (text)
+{
+    if (text == message_text)
+        message_sprite.SetOpacity (0);
+}
+
+fun refresh ()
+{
+    ticks = (ticks + 1) % 50;
+    cursor_sprite.SetOpacity (dialogue_visible && ticks < 25);
+}
+
+Plymouth.SetDisplayPasswordFunction (display_password);
+Plymouth.SetDisplayQuestionFunction (display_question);
+Plymouth.SetDisplayNormalFunction (display_normal);
+Plymouth.SetDisplayMessageFunction (display_message);
+Plymouth.SetHideMessageFunction (hide_message);
+Plymouth.SetRefreshFunction (refresh);

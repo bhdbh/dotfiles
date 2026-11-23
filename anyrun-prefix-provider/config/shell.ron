@@ -1,4 +1,1 @@
-Config(
-    prefix: "$",
-    shell: None,
-)
+../../anyrun/config/shell.ron

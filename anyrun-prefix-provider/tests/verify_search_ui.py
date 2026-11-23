@@ -8,6 +8,8 @@ import tempfile
 import time
 
 home = Path.home()
+repo = Path(__file__).resolve().parents[2]
+target = Path(os.environ.get('CARGO_TARGET_DIR', home / '.cache/anyrun-build'))
 with tempfile.TemporaryDirectory(prefix='anyrun-search-ui-') as temporary:
     root = Path(temporary)
     runtime = root / 'runtime'
@@ -54,13 +56,19 @@ with tempfile.TemporaryDirectory(prefix='anyrun-search-ui-') as temporary:
                 time.sleep(0.05)
             env.update(SWAYSOCK=str(sockets[0]), WAYLAND_DISPLAY=wayland[0].name)
             command = ['cargo', 'test', '--offline', '--locked', '--release', '--manifest-path',
-                       str(home / '.local/src/anyrun/Cargo.toml'), '--package', 'anyrun', '--target-dir',
-                       str(home / '.cache/anyrun-prefix-build')]
-            subprocess.run(command + ['search_debounce_ui_flow', '--', '--ignored', '--nocapture', '--test-threads=1'], env=env, check=True, timeout=90)
+                       str(repo / 'anyrun/Cargo.toml'), '--package', 'anyrun', '--target-dir',
+                       str(target)]
+            separator = ['--']
+            if binary := os.environ.get('ANYRUN_TEST_BINARY'):
+                command = [binary]
+                separator = []
+            subprocess.run(command + ['history_replay_keeps_entry_empty_ui_flow'] + separator + ['--ignored', '--nocapture', '--test-threads=1'], env=env, check=True, timeout=90)
+            query_log.write_text('')
+            subprocess.run(command + ['search_debounce_ui_flow'] + separator + ['--ignored', '--nocapture', '--test-threads=1'], env=env, check=True, timeout=90)
             write_config(home / '.local/libexec/anyrun-prefix-provider', [home / '.config/anyrun/plugins/librink.so'])
             (config / 'rink.ron').write_text('Config(prefix: "=", pull_currencies: false)\n')
-            subprocess.run(command + ['calculator_ui_flow', '--', '--ignored', '--nocapture', '--test-threads=1'], env=env, check=True, timeout=90)
-            print('PASS: debounce, retained rows, complete batches, stale responses, Enter, menus and calculator')
+            subprocess.run(command + ['calculator_ui_flow'] + separator + ['--ignored', '--nocapture', '--test-threads=1'], env=env, check=True, timeout=90)
+            print('PASS: history replay without entry changes, debounce, retained rows, complete batches, stale responses, Enter, menus and calculator')
         finally:
             if compositor.poll() is None:
                 compositor.terminate()

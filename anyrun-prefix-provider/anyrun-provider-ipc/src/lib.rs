@@ -3,7 +3,7 @@ use std::io;
 use anyrun_interface::{HandleResult, Match, PluginInfo, abi_stable::std_types::RVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
     net::UnixStream,
 };
 
@@ -97,12 +97,12 @@ pub enum Error {
 }
 
 pub struct Socket {
-    pub inner: BufReader<UnixStream>,
+    inner: Lines<BufReader<UnixStream>>,
 }
 
 impl Socket {
     pub fn new(stream: UnixStream) -> Self {
-        let inner = BufReader::new(stream);
+        let inner = BufReader::new(stream).lines();
 
         Self { inner }
     }
@@ -110,14 +110,44 @@ impl Socket {
     pub async fn send<T: Serialize>(&mut self, value: &T) -> io::Result<()> {
         let mut buf = serde_json::to_string(value).map_err(io::Error::other)?;
         buf.push('\n');
-        self.inner.get_mut().write_all(buf.as_bytes()).await?;
+        self.inner.get_mut().get_mut().write_all(buf.as_bytes()).await?;
         Ok(())
     }
 
     pub async fn recv<T: DeserializeOwned>(&mut self) -> io::Result<T> {
-        let mut buf = String::new();
-        self.inner.read_line(&mut buf).await?;
+        // The framing state must outlive a recv future: both callers use
+        // select!, which may cancel a read after consuming only part of a line.
+        let line = self.inner.next_line().await?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "provider disconnected")
+        })?;
+        serde_json::from_str::<T>(&line)
+            .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, why))
+    }
+}
 
-        serde_json::from_str::<T>(&buf).map_err(io::Error::other)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::{poll_fn, Future}, task::Poll};
+
+    #[test]
+    fn fragmented_message_survives_cancellation_and_eof_is_explicit() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let (reader, mut writer) = UnixStream::pair().unwrap();
+            let mut socket = Socket::new(reader);
+            writer.write_all(b"{\"Query\":{\"text\":\"frag").await.unwrap();
+            {
+                let mut pending = std::pin::pin!(socket.recv::<Request>());
+                poll_fn(|cx| {
+                    assert!(pending.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                }).await;
+            }
+            writer.write_all(b"mented\"}}\n\"History\"\n").await.unwrap();
+            assert!(matches!(socket.recv().await.unwrap(), Request::Query { text } if text == "fragmented"));
+            assert!(matches!(socket.recv().await.unwrap(), Request::History));
+            drop(writer);
+            assert_eq!(socket.recv::<Request>().await.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        });
     }
 }

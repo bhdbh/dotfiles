@@ -1,5 +1,7 @@
 .build/
 .publish/
+*.md
+docs/
 **/.git/
 **/target/
 **/build/
@@ -43,5 +45,3 @@ modules.order
 *.key
 /system-security/
 /maintenance/
-/sway-idle/source/physlock
-!/sway-window-background/.build-deps/usr/lib64/*.so

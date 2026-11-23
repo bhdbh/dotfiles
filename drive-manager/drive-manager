@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import signal
+import time
 
 SERVICE = "org.freedesktop.UDisks2"
 ROOT = "/org/freedesktop/UDisks2"
@@ -20,13 +21,27 @@ def usb_drive(objects, block):
     while block:
         drive = objects.get(block.get("Drive"), {}).get(DRIVE, {})
         if drive.get("ConnectionBus") == "usb":
-            return drive
+            return drive, block
         backing = block.get("CryptoBackingDevice", "/")
         if backing == "/" or backing in visited:
-            return None
+            return None, None
         visited.add(backing)
         block = objects.get(backing, {}).get(BLOCK, {})
-    return None
+    return None, None
+
+
+def attachment_id(device, drive, sys_block=Path("/sys/class/block"), boot_file=Path("/proc/sys/kernel/random/boot_id")):
+    """Kernel diskseq survives daemon restarts, but changes on reattachment."""
+    boot = boot_file.read_text().strip()
+    try:
+        disk = (sys_block / Path(device).name).resolve(strict=True)
+        if (disk / "partition").exists():
+            disk = disk.parent
+        sequence = str(int((disk / "diskseq").read_text()))
+        return "diskseq", boot, sequence
+    except (OSError, ValueError):
+        # Compatibility for kernels without diskseq; Fedora exposes it.
+        return "udisks", boot, str(int(drive.get("TimeMediaDetected", 0)))
 
 
 def safe_name(value):
@@ -39,11 +54,12 @@ def volumes(objects):
     for object_path, interfaces in objects.items():
         block = interfaces.get(BLOCK, {})
         filesystem = interfaces.get(FILESYSTEM)
-        drive = usb_drive(objects, block)
+        drive, physical = usb_drive(objects, block)
         if filesystem is None or drive is None or block.get("HintIgnore", False):
             continue
         device = os.fsdecode(bytes(block.get("Device", [])).rstrip(b"\0"))
         uuid = str(block.get("IdUUID", ""))
+        physical_device = os.fsdecode(bytes(physical.get("Device", [])).rstrip(b"\0"))
         label = safe_name(block.get("IdLabel", "")) or safe_name(uuid) or safe_name(Path(device).name) or "USB"
         mounts = [os.fsdecode(bytes(p).rstrip(b"\0")) for p in filesystem.get("MountPoints", [])]
         mounts = [p for p in mounts if p.startswith("/") and p != "/" and os.path.isdir(p) and os.access(p, os.R_OK | os.X_OK)]
@@ -53,7 +69,7 @@ def volumes(objects):
             "mounted": bool(filesystem.get("MountPoints", [])),
             "auto": bool(block.get("HintAuto", True)) and not block.get("HintSystem", False)
                 and block.get("IdUsage") == "filesystem",
-            "identity": (device, uuid, int(drive.get("TimeMediaDetected", 0))),
+            "identity": (device, uuid, *attachment_id(physical_device, drive)),
         }
     return result
 
@@ -123,7 +139,47 @@ class Links:
                 logging.warning("Keeping ~/Drives because it contains unmanaged entries")
 
 
+class MountHistory:
+    """Remember observed mounts for this physical attachment across restarts."""
+    def __init__(self, state):
+        self.state = Path(state)
+        try:
+            saved = json.loads(self.state.read_text())
+        except FileNotFoundError:
+            saved = []
+        if not isinstance(saved, list) or any(
+            not isinstance(entry, list) or len(entry) != 5
+            or any(not isinstance(value, str) for value in entry) for entry in saved
+        ):
+            raise ValueError("Invalid mount-history state")
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        self.mounted = {tuple(entry) for entry in saved if entry[3] == boot}
+        self.dirty = False
+
+    def remember(self, identity):
+        if identity not in self.mounted:
+            self.mounted = {entry for entry in self.mounted if entry[0] != identity[0]}
+            self.mounted.add(identity)
+            self.dirty = True
+        self.save()
+
+    def save(self):
+        if not self.dirty:
+            return
+        self.state.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state.with_suffix(".tmp")
+        temporary.write_text(json.dumps(sorted(self.mounted)) + "\n")
+        os.replace(temporary, self.state)
+        self.dirty = False
+
+
 class Manager:
+    MAX_ATTEMPTS = 6
+    PERMANENT_ERRORS = {
+        SERVICE + ".Error.NotSupported", SERVICE + ".Error.NotMountable",
+        SERVICE + ".Error.OptionNotPermitted", "org.freedesktop.DBus.Error.InvalidArgs",
+    }
+
     def __init__(self):
         import dbus
         from dbus.mainloop.glib import DBusGMainLoop
@@ -134,19 +190,27 @@ class Manager:
         self.bus = dbus.SystemBus()
         self.loop = GLib.MainLoop()
         self.pending = False
-        self.seen = {}
-        self.links = Links(Path.home() / "Drives", Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "drive-manager/links.json")
+        self.inflight = {}
+        self.failures = {}
+        self.available = True
+        state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "drive-manager"
+        self.links = Links(Path.home() / "Drives", state / "links.json")
+        self.history = MountHistory(state / "mounts.json")
         for interface, member in (("org.freedesktop.DBus.ObjectManager", "InterfacesAdded"),
                                   ("org.freedesktop.DBus.ObjectManager", "InterfacesRemoved"),
                                   ("org.freedesktop.DBus.Properties", "PropertiesChanged")):
             self.bus.add_signal_receiver(self.schedule, signal_name=member, dbus_interface=interface, bus_name=SERVICE)
         self.bus.add_signal_receiver(self.owner_changed, signal_name="NameOwnerChanged",
                                      dbus_interface="org.freedesktop.DBus", arg0=SERVICE)
+        # Recovery also covers missed signals and user changes in ~/Drives.
         GLib.timeout_add_seconds(5, self.periodic)
         self.schedule()
 
     def owner_changed(self, name, old, new):
-        self.seen.clear()
+        self.available = bool(new)
+        self.inflight.clear()
+        self.failures.clear()
+        # Keep observed mounts: a D-Bus restart is not a physical reattachment.
         self.schedule()
 
     def schedule(self, *args):
@@ -158,33 +222,62 @@ class Manager:
         self.schedule()
         return True
 
-    def mounted(self, path, mountpoint):
+    def mounted(self, path, identity, token, mountpoint):
+        if self.inflight.get(path) != (identity, token):
+            return
+        del self.inflight[path]
+        self.failures.pop(path, None)
+        self.history.remember(identity)
         logging.info("Mounted %s at %s", path, mountpoint)
         self.schedule()
 
-    def failed(self, path, error):
-        logging.error("Cannot mount %s: %s", path, error)
+    def failed(self, path, identity, token, error):
+        if self.inflight.get(path) != (identity, token):
+            return
+        del self.inflight[path]
+        attempts = self.failures[path][1]
+        error_name = str(getattr(error, "get_dbus_name", lambda: "")())
+        if error_name in self.PERMANENT_ERRORS:
+            attempts = self.MAX_ATTEMPTS
+        self.failures[path] = (identity, attempts, time.monotonic() + min(60, 5 * 2 ** (attempts - 1)))
+        logging.error("Cannot mount %s (attempt %s/%s): %s", path, attempts, self.MAX_ATTEMPTS, error)
         self.schedule()
 
     def refresh(self):
         self.pending = False
+        if not self.available:
+            return False
         try:
             proxy = self.bus.get_object(SERVICE, ROOT)
             objects = self.dbus.Interface(proxy, "org.freedesktop.DBus.ObjectManager").GetManagedObjects(timeout=10)
             current = volumes(objects)
-            self.seen = {p: identity for p, identity in self.seen.items() if p in current}
+            for mapping in (self.inflight, self.failures):
+                for path in list(mapping):
+                    if path not in current or mapping[path][0] != current[path]["identity"]:
+                        del mapping[path]
             for path, volume in current.items():
-                if not volume["auto"] and not volume["mounted"]:
+                identity = volume["identity"]
+                if volume["mounted"]:
+                    self.history.remember(identity)
+                    self.inflight.pop(path, None)
+                    self.failures.pop(path, None)
                     continue
-                if self.seen.get(path) == volume["identity"]:
+                if not volume["auto"] or identity in self.history.mounted or path in self.inflight:
                     continue
-                # Once per attachment: a manual unmount must stay unmounted.
-                self.seen[path] = volume["identity"]
-                if volume["auto"] and not volume["mounted"]:
+                failure = self.failures.get(path)
+                if failure and (failure[1] >= self.MAX_ATTEMPTS or time.monotonic() < failure[2]):
+                    continue
+                token = object()
+                self.inflight[path] = identity, token
+                self.failures[path] = identity, (failure[1] if failure else 0) + 1, 0
+                try:
                     filesystem = self.dbus.Interface(self.bus.get_object(SERVICE, path), FILESYSTEM)
                     filesystem.Mount({"auth.no_user_interaction": self.dbus.Boolean(True)},
-                                     reply_handler=lambda mountpoint, p=path: self.mounted(p, mountpoint),
-                                     error_handler=lambda error, p=path: self.failed(p, error), timeout=60)
+                                     reply_handler=lambda mountpoint, p=path, i=identity, t=token: self.mounted(p, i, t, mountpoint),
+                                     error_handler=lambda error, p=path, i=identity, t=token: self.failed(p, i, t, error), timeout=60)
+                except Exception as error:
+                    self.failed(path, identity, token, error)
+            self.history.save()
             self.links.sync([v for v in current.values() if v["mount"]])
         except Exception:
             logging.exception("Failed to reconcile USB drives")

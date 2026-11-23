@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Text Editor
+Comment=Open .txt in Micro and other text files in VS Code
+Exec=@TEXT_OPENER@ %F
+Terminal=false
+NoDisplay=true
+Icon=text-editor
+Categories=Utility;TextEditor;
+MimeType=text/plain;application/x-zerosize;
